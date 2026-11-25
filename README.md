@@ -94,6 +94,50 @@ explains how.
   <img src="packages/gigaplot/docs/images/downsampling-zoom.gif" width="720" alt="Zooming into a 20 million row table in Deephaven. Each zoom first scales up the coarse data, then fades in the detailed data from the server">
 </p>
 
+### Business time and range breaks
+
+Markets close, but most plotting libraries keep drawing the time in between,
+so nights, weekends, and holidays stretch across most of the axis as flat
+lines. gigaplot's scales take them out. A business calendar scale knows the
+time zone, the sessions of a day, including a lunch break, the business days,
+and the holidays, including half days, and follows daylight saving. Each close
+sits right beside the next open.
+
+![The same six weeks of ticking prices on a clock time axis, where nights, weekends, and a holiday are long flat lines, and on a business calendar axis, where only trading sessions remain](packages/gigaplot/docs/images/market-hours.png)
+
+The ticks follow the calendar too: round clock times within sessions when
+zoomed in, then the opens of days, weeks, and months as the view widens, spaced
+by business time so a weekend takes no room. Partway through the zoom below,
+Friday the 16th sits next to Tuesday the 20th, with the weekend and Martin Luther King Jr. Day gone.
+
+<p align="center">
+  <img src="packages/gigaplot/docs/images/business-time-zoom.gif" width="800" alt="Zooming into ticking prices on a business calendar axis. The ticks go from weeks to days to times within sessions, and each session's close runs straight into the next open">
+</p>
+
+For anything else, a range break scale removes the ranges you give it, from a
+list or from a function that generates them as the axis extends. Plots pan,
+zoom, and downsample in positions along the scale, so breaks hold up on tables
+of millions of rows, and the Deephaven plugin bins them by business time on the
+server.
+
+```tsx
+const nyse = createBusinessCalendarScale({
+  timeZone: "America/New_York",
+  sessions: [["09:30", "16:00"]],
+  holidays: ["2026-01-19"],
+});
+
+<Plot source={source} xScale={nyse} />;
+```
+
+```python
+gp.line(prices, x="Timestamp", y="Price", x_scale=gp.calendar_scale("USNYSE_EXAMPLE"))
+```
+
+See [scales](packages/gigaplot/docs/scales.md) for log, exponential, and power
+axes, and the
+[plugin's market hours examples](deephaven-plugin-gigaplot/README.md#market-hours-and-other-scales).
+
 ## Gallery
 
 From the [demo app](packages/gigaplot-demo), which runs with `npm start` and
@@ -130,8 +174,8 @@ needs no server.
   </tr>
   <tr>
     <td align="center" width="33%">
-      <img src="packages/gigaplot/docs/images/market-hours.png" alt="The same prices in clock time and on a business calendar"><br>
-      Market hours
+      <img src="packages/gigaplot/docs/images/scatter-3d.png" alt="Three clusters of points in 3D"><br>
+      Scatter 3D
     </td>
     <td align="center" width="33%">
       <img src="packages/gigaplot/docs/images/log-scale.png" alt="Growth on linear and log axes"><br>
