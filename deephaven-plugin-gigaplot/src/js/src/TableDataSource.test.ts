@@ -8,8 +8,33 @@ const dh = { Table: { EVENT_UPDATED } } as unknown as typeof DhType;
 
 type Row = Record<string, unknown>;
 
+/**
+ * `legacy` mirrors `RangeSet.iterator()` before deephaven-core 43, which has
+ * `hasNext` and reports `done` as whether more values remain after the one
+ * returned. `standard` is the plain JS iterator returned from 43 on.
+ */
+type IteratorKind = "legacy" | "standard";
+
+function makeIterator(size: number, kind: IteratorKind) {
+  if (kind === "standard") {
+    return Array.from({ length: size }, (_, i) => i)[Symbol.iterator]();
+  }
+  let i = 0;
+  return {
+    hasNext: () => i < size,
+    next: () => {
+      const value = i;
+      i += 1;
+      return { value, done: i < size };
+    },
+  };
+}
+
 /** A table whose single subscription can be fed rows with `emit`. */
-function makeTable(types: Record<string, string> = {}) {
+function makeTable(
+  types: Record<string, string> = {},
+  iteratorKind: IteratorKind = "legacy",
+) {
   let listener: ((event: { detail: unknown }) => void) | undefined;
   const subscription = {
     addEventListener: jest.fn((_type: string, l: typeof listener) => {
@@ -30,13 +55,7 @@ function makeTable(types: Record<string, string> = {}) {
       detail: {
         fullIndex: {
           size: rows.length,
-          iterator: () => {
-            let i = 0;
-            return {
-              hasNext: () => i < rows.length,
-              next: () => ({ value: i++ }),
-            };
-          },
+          iterator: () => makeIterator(rows.length, iteratorKind),
         },
         getData: (key: number, column: { name: string }) =>
           rows[key][column.name],
@@ -416,6 +435,32 @@ describe("TableDataSource", () => {
         yMax: 1,
       });
     });
+
+    it.each<IteratorKind>(["legacy", "standard"])(
+      "reads bounds and rows from %s row set iterators",
+      async (kind) => {
+        const bounds = makeTable({}, kind);
+        source.setBoundsTable(bounds.table);
+        bounds.emit([{ XMin: 0, XMax: 1000, YMin0: -1, YMax0: 1 }]);
+        expect((await source.getShape()).bounds).toEqual({
+          xMin: 0,
+          xMax: 1000,
+          yMin: -1,
+          yMax: 1,
+        });
+
+        const data = makeTable({}, kind);
+        source.setTable(data.table);
+        data.emit([
+          { X: 0, Y: 1 },
+          { X: 500, Y: -1 },
+          { X: 1000, Y: 0 },
+        ]);
+        const result = await source.requestSeriesData(request(1000));
+        expect(Array.from(result.data.x)).toEqual([0, 500, 1000]);
+        expect(Array.from(result.data.y)).toEqual([1, -1, 0]);
+      },
+    );
 
     it("waits for bounds before requesting a viewport", async () => {
       await source.requestSeriesData(request(1));
