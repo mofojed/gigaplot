@@ -2,6 +2,13 @@
 
 A Deephaven element plugin that plots tables with [gigaplot](../packages/gigaplot), generated from the element template in [deephaven-plugins](https://github.com/deephaven/deephaven-plugins).
 
+> [!WARNING]
+> This plugin is experimental. It is not published yet, and its Python API may change without notice.
+
+Plots draw with WebGPU, follow ticking tables as they update, and downsample tables of tens of millions of rows on the server, so the browser only receives what fits on screen. See [Using the Plugin](#using-the-plugin) to get started.
+
+![The gigaplot showcase dashboard in Deephaven: live candles, 50 million row lines, a 6 million point galaxy, stacked areas, market hours, and 3D plots](./_assets/showcase-dashboard.png)
+
 ## Plugin Structure
 
 The `src` directory contains the Python and JavaScript code for the plugin.  
@@ -145,7 +152,13 @@ line_plot = gp.line(ticking, x="X", y=["Sin", "Cos"], title="Waves")
 scatter_plot = gp.scatter(ticking, x="Sin", y="Cos")
 ```
 
+In Code Studio, each plot opens in a panel of its own and updates as its table ticks:
+
+![A ticking price with fast and slow moving averages plotted in Deephaven's Code Studio, below the Python that made it and beside the table it plots](./_assets/code-studio.png)
+
 For a tour of everything below in one `deephaven.ui` dashboard, with live markets, tens of millions of rows, scales, and 3D, run [examples/showcase_dashboard.py](examples/showcase_dashboard.py), such as with `exec(open("examples/showcase_dashboard.py").read())`. It needs several GB of heap, such as `-Xmx8g`. To compare, [examples/showcase_plotly.py](examples/showcase_plotly.py) draws the same dashboard with `deephaven.plot.express`.
+
+![The showcase dashboard with other tabs open: a 6 million point galaxy, the Lorenz attractor in 3D, venue share as a percent stacked area, and growth on a log axis](./_assets/showcase-dashboard-tabs.png)
 
 There is a function per plot type, like `deephaven.plot.express`: `gp.line`, `gp.scatter`, `gp.area`, `gp.ohlc`, and `gp.candlestick`, and in 3D `gp.scatter3d` and `gp.line3d`. They share the options below, except where [3D plots](#3d-plots) say otherwise. 2D plots also take `x_scale` and `y_scale`, for [market hours and other scales](#market-hours-and-other-scales).
 
@@ -476,7 +489,9 @@ clusters = empty_table(10_000_000).update(
 clusters_plot = gp.scatter(clusters, x="X", y="Y", title="10 million points")
 ```
 
-Zoom in on `prices_plot` and the detail fills in down to individual seconds.
+Zoom in on `prices_plot` and the detail fills in down to individual seconds. While the next table loads, the plot scales up the one it has instead of going blank, then fades the detailed one in:
+
+![Zooming into a 20 million row table. Each zoom first scales up the coarse data, shows a Downsampling status, then fades in the detailed data from the server](../packages/gigaplot/docs/images/downsampling-zoom.gif)
 
 ### How downsampling works
 
