@@ -658,8 +658,10 @@ export class TableDataSource extends StaticDataSource {
       columns[0],
       this.seriesColumns.map((_, i) => columns[2 + i * 2]),
     );
+    // Only `next` is used, bounded by `size`: the JS API's row set iterators
+    // have no `hasNext` from deephaven-core 43, and report `done` wrongly before
     const iterator = data.fullIndex.iterator();
-    const key = iterator.hasNext() ? iterator.next().value : undefined;
+    const key = data.fullIndex.size > 0 ? iterator.next().value : undefined;
     const readX = (index: number): number =>
       key == null
         ? Number.NaN
@@ -713,9 +715,9 @@ export class TableDataSource extends StaticDataSource {
       series.map(() => new Float64Array(size)),
     );
 
+    // Bounded by `size` for the same reason as in `onBoundsUpdate`
     const iterator = data.fullIndex.iterator();
-    let i = 0;
-    while (iterator.hasNext()) {
+    for (let i = 0; i < size; i += 1) {
       const key = iterator.next().value;
       xs[i] = this.toPlotX(data.getData(key, xColumn));
       for (let s = 0; s < seriesColumns.length; s += 1) {
@@ -727,7 +729,6 @@ export class TableDataSource extends StaticDataSource {
             this.is3D && c === 1 ? toNumber(value) : this.toPlotY(value, s);
         }
       }
-      i += 1;
     }
     const isTicksChanged = this.updateAxisTicks();
     const isScaleChanged = this.updateXScale();

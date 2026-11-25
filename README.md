@@ -4,11 +4,147 @@ A GPU accelerated plotting library, and a [Deephaven](https://deephaven.io)
 plugin that uses it to plot live, ticking tables with tens of millions of
 rows.
 
+> [!WARNING]
+> gigaplot is experimental. It is not published yet, and its APIs, Python
+> functions, and rendering may change without notice.
+
+![The gigaplot showcase dashboard in Deephaven: live candles, 50 million row lines, a 6 million point galaxy, stacked areas, market hours, and 3D plots](deephaven-plugin-gigaplot/_assets/showcase-dashboard.png)
+
 gigaplot draws with WebGPU, and falls back to Canvas 2D where WebGPU is not
 available. Sources and renderers can be swapped, and the library does not depend
 on Deephaven. It supports scatter, line, area, OHLC, and candlestick plots in
 2D, and scatter and line plots in 3D. 2D axes can use log, exponential, power,
 or business calendar scales.
+
+## Why gigaplot
+
+### Renderer agnostic
+
+Renderers sit behind one `PlotRenderer` interface, and a plot picks the first
+one in its preference list that the machine supports and that can draw every
+series in it. WebGPU is the default, for the most performance, with Canvas 2D
+as the fallback that runs everywhere. Data sources, axes, legends, and hover
+never talk to a renderer directly, so a new renderer, such as SVG or WebGL,
+[registers](packages/gigaplot/docs/architecture.md) without touching the rest
+of the library.
+
+### Performance
+
+gigaplot aims to be the fastest plotting library in the browser, and ships
+[a benchmark](packages/plot-benchmark) that holds it to that against Plotly,
+uPlot, Lightweight Charts, ECharts, Chart.js, and deck.gl. With 10% of the
+points replaced on every frame, from the
+[recorded results](packages/plot-benchmark/RESULTS.md):
+
+| 1 million points, FPS | gigaplot (WebGPU) | deck.gl | uPlot | Plotly (WebGL) | ECharts | Chart.js |
+| --------------------- | ----------------: | ------: | ----: | -------------: | ------: | -------: |
+| Scatter               |                60 |      60 |   2.7 |            2.7 |     1.8 |      1.0 |
+| Scrolling line        |                60 |      60 |    60 |            2.6 |     4.8 |     10.0 |
+
+At 10 million points, gigaplot is the fastest of them on both: 28 FPS on
+scatter, about twice deck.gl, and 24 FPS on lines.
+
+Speed per plot is only half of it on a dashboard. Browsers cap how many WebGL
+contexts a page can have at once, about 16 in desktop Chrome and fewer on
+mobile, and past that they drop the oldest, so the plots drawn first go blank.
+Libraries that draw with WebGL, such as Plotly's WebGL traces and deck.gl,
+create a context per plot and run into that limit. WebGPU has no such limit:
+every gigaplot plot on a page shares
+[one GPU device](packages/gigaplot/docs/architecture.md#webgpu-renderer), and
+its canvas contexts are cheap views onto it, so a page can hold as many plots
+as memory allows. The demo's 64 plots on one page are all drawn with WebGPU.
+
+<p align="center">
+  <img src="packages/gigaplot/docs/images/scatter-stress.gif" width="640" alt="A spiral galaxy of one million points, with 100,000 of them replaced on every frame, drawn with WebGPU at around 50 FPS">
+</p>
+
+### Live data
+
+gigaplot is built for data that never stops changing. Sources describe what
+changed as deltas, such as rows appended to the end, rows updated in place, or
+old rows trimmed from the start, and the WebGPU renderer writes just those bytes
+into the GPU buffers it already has instead of uploading every series again.
+Redraws are coalesced into one animation frame, so a table ticking faster than
+the screen refreshes still draws at most once per frame. In Deephaven, plots
+of ticking tables keep up as rows arrive, including the downsampled ones.
+
+### Downsampling
+
+No screen can show 50 million points, so gigaplot is designed to draw only
+what fits, at the resolution it fits. A data source decides how to reduce its
+data for each zoom, pan, and resize, and that algorithm is yours to choose:
+
+- **Client side**: pass a `Downsampler` to `StaticDataSource`. The bundled
+  min/max downsampler draws exactly what every point would, and
+  [LTTB](packages/gigaplot/docs/downsampling.md#lttbdownsampler) is included
+  for a fixed point budget. Write your own with the same signature.
+- **Server side**: a source can ask a server for data at the current viewport.
+  The Deephaven plugin does this, aggregating the table on the server so the
+  browser only receives a few rows per pixel, and takes a
+  [Python function](deephaven-plugin-gigaplot/README.md#how-downsampling-works)
+  for your own algorithm.
+
+While new data loads, the plot never jumps or goes blank. Zooming in scales
+the data it has like a picture, pixel for pixel, and fades the detailed data
+in when it arrives. Zooming out hatches the edges that have not loaded yet.
+[Zoom transitions](packages/gigaplot/docs/downsampling.md#zoom-transitions)
+explains how.
+
+<p align="center">
+  <img src="packages/gigaplot/docs/images/downsampling-zoom.gif" width="720" alt="Zooming into a 20 million row table in Deephaven. Each zoom first scales up the coarse data, then fades in the detailed data from the server">
+</p>
+
+## Gallery
+
+From the [demo app](packages/gigaplot-demo), which runs with `npm start` and
+needs no server.
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="packages/gigaplot/docs/images/candlestick.png" alt="Candlestick bars with a moving average"><br>
+      Candlestick
+    </td>
+    <td align="center" width="33%">
+      <img src="packages/gigaplot/docs/images/stacked-area.png" alt="Three stacked areas"><br>
+      Stacked area
+    </td>
+    <td align="center" width="33%">
+      <img src="packages/gigaplot/docs/images/line.png" alt="Sine and cosine line series"><br>
+      Line
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <img src="packages/gigaplot/docs/images/line-3d.png" alt="Two Lorenz attractors and a helix in 3D"><br>
+      Line 3D
+    </td>
+    <td align="center" width="33%">
+      <img src="packages/gigaplot/docs/images/ripple-3d.png" alt="Waves rippling from two drops, as a wireframe of 3D lines"><br>
+      Ripple 3D
+    </td>
+    <td align="center" width="33%">
+      <img src="packages/gigaplot/docs/images/star-field.png" alt="A ticking 3D star field, with points sized by perspective"><br>
+      Star field
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <img src="packages/gigaplot/docs/images/market-hours.png" alt="The same prices in clock time and on a business calendar"><br>
+      Market hours
+    </td>
+    <td align="center" width="33%">
+      <img src="packages/gigaplot/docs/images/log-scale.png" alt="Growth on linear and log axes"><br>
+      Log scale
+    </td>
+    <td align="center" width="33%">
+      <img src="packages/gigaplot/docs/images/many.png" alt="A grid of 64 plots of every kind"><br>
+      64 plots on one page
+    </td>
+  </tr>
+</table>
+
+## In this repository
 
 This repository is an npm workspace containing:
 
