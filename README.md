@@ -251,6 +251,10 @@ Deephaven plugin, install it, and run it in a server.
 conventions, and applies to people as much as to coding agents. Agent skills
 for the library and the plugin are in [.github/skills](.github/skills).
 
+Commit messages follow
+[Conventional Commits](https://www.conventionalcommits.org/), such as
+`fix(view): draw plots whose bounds arrive while the renderer initializes`.
+
 ## License
 
 [Apache License 2.0](LICENSE)

@@ -111,8 +111,14 @@ style, and reformatting them buries the real change.
 - Keep demo and test data seeded. The e2e tests compare renders.
 - When a change alters behavior described in `README.md`, the plugin README,
   or `packages/gigaplot/docs`, update those docs in the same change.
-- Commit subjects are imperative sentence case with no prefix, such as
-  "Draw plots whose bounds arrive while the renderer initializes". Use the
+- Commits follow [Conventional Commits](https://www.conventionalcommits.org/):
+  `<type>(<optional scope>): <subject>`, such as
+  "fix(view): draw plots whose bounds arrive while the renderer initializes".
+  Use `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `build`, `ci`, or
+  `chore` for the type, and a package or area such as `gigaplot`, `plugin`,
+  `demo`, `benchmark`, or `view` for the scope. Write the subject in the
+  imperative mood, lowercase, with no trailing period. Mark breaking changes
+  with `!` after the type or scope and a `BREAKING CHANGE:` footer. Use the
   body to explain why.
 
 ## Async lifecycle pitfalls
