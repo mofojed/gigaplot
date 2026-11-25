@@ -1,0 +1,373 @@
+$background: var(--demo-color-bg);
+$surface: var(--demo-color-surface);
+$border: var(--demo-color-border);
+$text: var(--demo-color-text);
+$text-strong: var(--demo-color-text-strong);
+$text-muted: var(--demo-color-text-muted);
+$accent: #4878ea;
+
+:root {
+  --demo-color-bg: #1a171a;
+  --demo-color-surface: #211f22;
+  --demo-color-border: #403e41;
+  --demo-color-text: #c0bfbf;
+  --demo-color-text-strong: #f0f0ee;
+  --demo-color-text-muted: #8b898c;
+}
+
+// Plots default to the @deephaven/components dark theme, so only the light
+// theme sets the chart variables. These are its values with the palette
+// variables resolved; plots re-theme as soon as the class is toggled.
+:root.theme-light {
+  --demo-color-bg: #dadada;
+  --demo-color-surface: #f7f7f7;
+  --demo-color-border: #b9b9b9;
+  --demo-color-text: #222222;
+  --demo-color-text-strong: #000000;
+  --demo-color-text-muted: #727272;
+
+  --dh-color-chart-bg: #f7f7f7;
+  --dh-color-chart-plot-bg: #eeeeee;
+  --dh-color-chart-grid: #b9b9b9;
+  --dh-color-chart-axis-line: #959595;
+  --dh-color-chart-axis-line-zero: #464646;
+  --dh-color-chart-legend-fg: #222222;
+  --dh-color-chart-colorway: #004a73 #007a4d #b08c00 #7326d3 #cb5d00 #ea3829
+    #3a4d00 #b622b7 #0c4f4c #c82269 #fafafa;
+  --dh-color-tooltip-bg: #ffffff;
+  --dh-color-tooltip-fg: #000000;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: $background;
+  color: $text;
+  font-family:
+    'Fira Sans',
+    -apple-system,
+    blinkmacsystemfont,
+    'Segoe UI',
+    sans-serif;
+  font-size: 13px;
+}
+
+.plot-demo {
+  display: grid;
+  grid-template-areas: 'header header' 'sidebar main';
+  grid-template-columns: 220px 1fr;
+  grid-template-rows: auto 1fr;
+  height: 100%;
+}
+
+.plot-demo-header {
+  align-items: baseline;
+  border-bottom: 1px solid $border;
+  display: flex;
+  gap: 12px;
+  grid-area: header;
+  padding: 8px 16px;
+
+  h1 {
+    color: $text-strong;
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0;
+  }
+}
+
+.plot-demo-active-renderer {
+  background: $surface;
+  border: 1px solid $border;
+  border-radius: 3px;
+  color: $accent;
+  font-family: 'Fira Mono', monospace;
+  padding: 1px 6px;
+}
+
+.plot-demo-stats {
+  color: $text-muted;
+  font-family: 'Fira Mono', monospace;
+}
+
+.plot-demo-sidebar {
+  border-right: 1px solid $border;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  grid-area: sidebar;
+  overflow-y: auto;
+  padding: 12px;
+
+  h2 {
+    color: $text-strong;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    margin: 4px 0 0;
+    text-transform: uppercase;
+  }
+
+  select {
+    background: $surface;
+    border: 1px solid $border;
+    border-radius: 3px;
+    color: $text;
+    padding: 4px;
+    width: 100%;
+  }
+}
+
+.plot-demo-examples {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+
+  button {
+    background: $surface;
+    border: 1px solid $border;
+    border-radius: 3px;
+    color: $text;
+    cursor: pointer;
+    padding: 6px 8px;
+    text-align: left;
+    width: 100%;
+
+    &:hover {
+      border-color: $accent;
+    }
+
+    &.is-selected {
+      border-color: $accent;
+      color: $text-strong;
+    }
+  }
+}
+
+.plot-demo-stream-toggle {
+  background: $accent;
+  border: none;
+  border-radius: 3px;
+  color: #fff;
+  cursor: pointer;
+  padding: 6px 8px;
+}
+
+.plot-demo-checkbox {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 6px;
+}
+
+.plot-demo-tooltip-controls {
+  border: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+
+  // Matches the sidebar section headings
+  legend {
+    color: $text-strong;
+    font-size: 11px;
+    font-weight: bold;
+    letter-spacing: 0.08em;
+    margin: 4px 0;
+    padding: 0;
+    text-transform: uppercase;
+  }
+}
+
+.plot-demo-description,
+.plot-demo-hint {
+  margin: 0;
+}
+
+.plot-demo-hint {
+  color: $text-muted;
+}
+
+.plot-demo-main {
+  grid-area: main;
+  min-height: 0;
+  min-width: 0;
+  padding: 12px;
+  position: relative;
+}
+
+.plot-demo-plot {
+  height: 100%;
+  width: 100%;
+}
+
+.plot-demo-single {
+  height: 100%;
+  width: 100%;
+}
+
+.plot-demo-grid {
+  display: grid;
+  gap: 3px;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-rows: repeat(8, minmax(0, 1fr));
+  height: 100%;
+  width: 100%;
+}
+
+.plot-demo-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  width: 100%;
+}
+
+.plot-demo-quad {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  height: 100%;
+  width: 100%;
+}
+
+.plot-demo-stack-item {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+
+  .plot-demo-plot {
+    flex: 1 1 0;
+    height: auto;
+    min-height: 0;
+  }
+}
+
+.plot-demo-stack-title {
+  color: $text-strong;
+  font-size: 12px;
+  font-weight: normal;
+  margin: 0 0 4px;
+}
+
+.plot-demo-error {
+  background: #4d2222;
+  border: 1px solid #a33;
+  border-radius: 3px;
+  color: #ffd9d9;
+  left: 12px;
+  padding: 8px;
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  z-index: 1;
+}
+
+.plot-demo-stress-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  label {
+    color: $text-strong;
+    font-size: 11px;
+    margin-top: 4px;
+  }
+}
+
+.plot-cube {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+}
+
+.plot-cube-scene {
+  align-items: center;
+  background: radial-gradient(circle at center, #262a3a 0%, $background 70%);
+  border-radius: 6px;
+  cursor: grab;
+  display: flex;
+  flex: 1;
+  justify-content: center;
+  min-height: 0;
+  outline: none;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+
+  &:active {
+    cursor: grabbing;
+  }
+
+  &:focus-visible {
+    box-shadow: inset 0 0 0 2px $accent;
+  }
+}
+
+.plot-cube-body {
+  position: relative;
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+
+.plot-cube-face {
+  backface-visibility: hidden;
+  background: $surface;
+  border: 1px solid rgba($accent, 0.6);
+  border-radius: 4px;
+  box-shadow:
+    0 0 24px rgba($accent, 0.35),
+    inset 0 0 12px rgba($accent, 0.15);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  inset: 0;
+  padding: 6px;
+  position: absolute;
+  transition: transform 600ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.plot-cube-face-label {
+  color: $text-strong;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 0 0 4px 2px;
+}
+
+.plot-cube-face-plot {
+  flex: 1;
+  min-height: 0;
+}
+
+.plot-cube-toolbar {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  padding-top: 8px;
+}
+
+.plot-cube-reset {
+  background: $surface;
+  border: 1px solid $border;
+  border-radius: 3px;
+  color: $text;
+  cursor: pointer;
+  padding: 4px 10px;
+
+  &:hover {
+    border-color: $accent;
+  }
+}

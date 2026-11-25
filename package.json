@@ -1,0 +1,48 @@
+{
+  "name": "gigaplot-workspace",
+  "private": true,
+  "workspaces": [
+    "packages/gigaplot",
+    "packages/gigaplot-demo",
+    "packages/plot-benchmark",
+    "deephaven-plugin-gigaplot/src/js"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "start": "npm start -w gigaplot-demo",
+    "types": "tsc -b",
+    "test": "jest",
+    "e2e": "playwright test",
+    "benchmark": "npm start -w plot-benchmark"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.26.0",
+    "@babel/preset-env": "^7.26.0",
+    "@babel/preset-react": "^7.26.3",
+    "@babel/preset-typescript": "^7.26.0",
+    "@playwright/test": "1.56.1",
+    "@testing-library/react": "^16.3.0",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react-swc": "^3.7.0",
+    "@webgpu/types": "^0.1.44",
+    "babel-jest": "^29.7.0",
+    "identity-obj-proxy": "^3.0.0",
+    "jest": "^29.7.0",
+    "jest-canvas-mock": "^2.5.2",
+    "jest-environment-jsdom": "^29.7.0",
+    "sass": "^1.83.0",
+    "typescript": "~5.6.2",
+    "vite": "^5.4.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mofojed/gigaplot.git"
+  },
+  "homepage": "https://github.com/mofojed/gigaplot",
+  "bugs": {
+    "url": "https://github.com/mofojed/gigaplot/issues"
+  }
+}

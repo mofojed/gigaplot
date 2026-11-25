@@ -1,0 +1,37 @@
+{
+  "name": "gigaplot",
+  "version": "0.0.1",
+  "description": "GPU accelerated plotting library",
+  "author": "Deephaven Data Labs LLC",
+  "license": "Apache-2.0",
+  "type": "module",
+  "source": "src/index.ts",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "engines": {
+    "node": ">=16"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "dependencies": {
+    "@deephaven/log": "^1.32.0"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mofojed/gigaplot.git",
+    "directory": "packages/gigaplot"
+  },
+  "homepage": "https://github.com/mofojed/gigaplot/tree/main/packages/gigaplot",
+  "bugs": {
+    "url": "https://github.com/mofojed/gigaplot/issues"
+  }
+}

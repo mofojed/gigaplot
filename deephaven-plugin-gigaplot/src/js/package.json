@@ -1,0 +1,53 @@
+{
+  "name": "deephaven-plugin-gigaplot",
+  "version": "0.0.1",
+  "description": "plugin for Deephaven",
+  "keywords": [
+    "Deephaven",
+    "plugin"
+  ],
+  "author": "mikebender",
+  "license": "Apache-2.0",
+  "main": "dist/index.js",
+  "scripts": {
+    "start": "vite build --watch",
+    "build": "tsc && vite build"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react-swc": "^3.7.0",
+    "react": "^18.3.1",
+    "typescript": "~5.6.2",
+    "vite": "^5.4.2"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "dependencies": {
+    "@deephaven/jsapi-bootstrap": "^1.32.0",
+    "@deephaven/jsapi-types": "^1.0.0-dev0.39.6",
+    "@deephaven/jsapi-utils": "^1.32.0",
+    "@deephaven/log": "^1.32.0",
+    "@deephaven/plugin": "^1.33.1",
+    "@deephaven/redux": "^1.33.0",
+    "gigaplot": "*",
+    "react-redux": "^7.2.9"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist/index.js"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mofojed/gigaplot.git",
+    "directory": "deephaven-plugin-gigaplot/src/js"
+  },
+  "homepage": "https://github.com/mofojed/gigaplot/tree/main/deephaven-plugin-gigaplot",
+  "bugs": {
+    "url": "https://github.com/mofojed/gigaplot/issues"
+  }
+}

@@ -1,0 +1,15 @@
+node_modules/
+dist/
+build/
+test-results/
+playwright-report/
+# Local secrets, such as API tokens
+.env
+.env.*
+# No secrets, just the demo's build defaults
+!packages/gigaplot-demo/.env
+!packages/gigaplot-demo/.env.development
+.playwright-mcp/
+.vscode/
+__pycache__/
+.venv/

@@ -1,0 +1,35 @@
+{
+  "name": "plot-benchmark",
+  "version": "0.0.1",
+  "description": "Raw rendering performance of gigaplot against other plotting libraries",
+  "author": "Deephaven Data Labs LLC",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": true,
+  "homepage": ".",
+  "dependencies": {
+    "@deck.gl/core": "^9.4.1",
+    "@deck.gl/layers": "^9.4.1",
+    "chart.js": "^4.6.1",
+    "echarts": "^6.1.0",
+    "gigaplot": "*",
+    "lightweight-charts": "^5.2.1",
+    "plotly.js-dist-min": "^4.2.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "uplot": "^1.6.32"
+  },
+  "scripts": {
+    "start": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@types/plotly.js": "^3.0.15"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mofojed/gigaplot.git",
+    "directory": "packages/plot-benchmark"
+  }
+}
