@@ -16,6 +16,11 @@ shows which renderer actually resolved, which is how you confirm a fallback
 happened. Scroll to zoom, drag to pan, and double click to reset. On 3D
 examples, drag to rotate instead.
 
+The URL's hash names the example, so <http://localhost:9020/gigaplot/#doom>
+opens Doom. Every push to `main` publishes the demo to
+<https://mofojed.github.io/gigaplot/> with
+[the pages workflow](../../.github/workflows/pages.yml).
+
 ## Examples
 
 | Example            | What it covers                                          |
