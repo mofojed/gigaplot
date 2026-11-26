@@ -92,6 +92,10 @@ export interface PlotHoverPoint {
   open?: number;
   high?: number;
   low?: number;
+  /** The x axis the series is drawn against, when it is not the primary one. */
+  xAxis?: string;
+  /** The y axis the series is drawn against, when it is not the primary one. */
+  yAxis?: string;
 }
 
 /** True for series that snap to the cursor's x rather than needing a hit. */
@@ -111,6 +115,11 @@ export interface PlotHover {
 export interface HoverHitTestInput {
   shape: PlotShape;
   viewport: Bounds;
+  /**
+   * The viewports of series drawn against axes besides the primary ones, by
+   * id, in the units of their axes. Other series use `viewport`.
+   */
+  seriesViewports?: ReadonlyMap<string, Bounds>;
   /** Size of the plot area. */
   area: PixelSize;
   /** Cursor position in pixels from the top left of the plot area. */
@@ -214,6 +223,7 @@ function getPointColor(
 export function findHover({
   shape,
   viewport,
+  seriesViewports,
   area,
   cursor,
   theme,
@@ -233,22 +243,34 @@ export function findHover({
   ) {
     return undefined;
   }
-  const xPerPixel = xSpan / area.width;
-  const yPerPixel = ySpan / area.height;
-  const x = viewport.xMin + cursor.x * xPerPixel;
-  const y = viewport.yMax - cursor.y * yPerPixel;
+  // The cursor in the units of a viewport
+  const locate = (bounds: Bounds) => {
+    const xPerPixel = (bounds.xMax - bounds.xMin) / area.width;
+    const yPerPixel = (bounds.yMax - bounds.yMin) / area.height;
+    return {
+      x: bounds.xMin + cursor.x * xPerPixel,
+      y: bounds.yMax - cursor.y * yPerPixel,
+      xPerPixel,
+      yPerPixel,
+    };
+  };
+  const primary = locate(viewport);
+  const { x, y } = primary;
 
   const points: PlotHoverPoint[] = [];
   for (let i = 0; i < shape.series.length; i += 1) {
     const descriptor = shape.series[i];
     const data = getSeriesData(descriptor.id);
     if (data != null && data.length > 0) {
+      const seriesViewport = seriesViewports?.get(descriptor.id);
+      const at = seriesViewport != null ? locate(seriesViewport) : primary;
+      const { xPerPixel, yPerPixel } = at;
       const index = isSnappingSeriesType(descriptor.type)
-        ? findLinePoint(data, x, y, theme.hoverDistance * xPerPixel)
+        ? findLinePoint(data, at.x, at.y, theme.hoverDistance * xPerPixel)
         : findScatterPoint(
             data,
-            x,
-            y,
+            at.x,
+            at.y,
             xPerPixel,
             yPerPixel,
             (descriptor.style?.pointSize ?? theme.pointSize) / 2 +
@@ -264,6 +286,12 @@ export function findHover({
           x: data.x[index],
           y: data.y[index],
         };
+        if (descriptor.xAxis != null) {
+          point.xAxis = descriptor.xAxis;
+        }
+        if (descriptor.yAxis != null) {
+          point.yAxis = descriptor.yAxis;
+        }
         if (descriptor.stacked === true && data.base != null) {
           point.value = data.y[index] - data.base[index];
         }

@@ -287,6 +287,43 @@ are in data units. Renderers, `AxisPainter`, and hover never see a scale, and
 lines join neighbouring points across a break, so a market's close runs into
 the next open.
 
+## Axes
+
+A 2D plot has a primary x axis and a primary y axis, along the bottom and
+left by default, and any number of others in the shape's `axes`, such as a
+second y axis on the right for series in other units. Each series is drawn
+against the axes its `xAxis` and `yAxis` name, or the primary ones.
+
+The viewport is the primary axes' range. Every other axis is _linked_ to the
+primary axis of its dimension: its range is the primary's scaled and offset.
+Going home sets each link, so every axis shows its own data at home, from its
+`range`, or else its series' bounds, or else the data loaded. Zooming and
+panning only move the viewport, so every axis moves with it, and series keep
+their places relative to each other. A plot following its data links its axes
+again as the data grows; a pinned plot keeps its links, and links only axes
+that are new.
+
+`PlotView` gives each series on another axis a viewport of its own, in the
+units of its axes:
+
+- requests ask for each series in its own viewport and scales, so a source
+  downsamples each for the axes it is drawn on,
+- `setViewport` passes the renderer a viewport per series on another axis,
+  which WebGPU writes into that series' uniforms and Canvas projects with,
+- hover hit tests each series in its own viewport, and reports its axes on the
+  point, so `HoverPainter` labels each value on its own axis.
+
+`placeAxes` lays the axes out around the plot area. Axes sharing an edge stack
+outward in order, each as wide as its tick labels, measured as they change, and
+its title. Only the primary axes draw gridlines, which would not line up
+otherwise.
+
+`LayeredDataSource` builds such a shape from several sources, one per layer,
+such as the tables of a line and a scatter, or prices and volumes on axes of
+their own. It prefixes series ids with their layer, forwards requests and
+deltas, and gives each axis the title, ticks, scale, and range of the layers
+on it.
+
 ## Theming
 
 `PlotView` resolves a `PlotTheme` from the Deephaven chart CSS variables in
@@ -297,7 +334,8 @@ change and hands the result to both `AxisPainter` and the renderer. See
 
 ## What is not here yet
 
-Interactive legends (toggling series), hover on plots under a CSS transform (the
+Interactive legends (toggling series), zooming one axis on its own, hover on
+plots under a CSS transform (the
 cursor is mapped through the bounding client rect), scales on 3D axes, series
 types beyond scatter, line, area, OHLC, and candlestick, and 3D series types
 beyond scatter and line. The Deephaven backed data source lives in

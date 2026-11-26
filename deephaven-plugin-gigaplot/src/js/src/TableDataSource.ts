@@ -128,6 +128,14 @@ export interface TableDataSourceOptions {
    * later with `setInstantFormatter`.
    */
   instantFormatter?: InstantFormatterFactory;
+  /**
+   * Converts Instants on the x axis to plot units. Sources whose x values
+   * share an axis, as layers of one plot can, must share one, so they count
+   * from the same origin. Defaults to one of the source's own.
+   */
+  xInstants?: InstantAxis;
+  /** Converts Instants on the y axis to plot units, like `xInstants`. */
+  yInstants?: InstantAxis;
 }
 
 interface TableSubscription {
@@ -314,9 +322,9 @@ export class TableDataSource extends StaticDataSource {
   private isYInstant: boolean[];
 
   /** Origins are per axis, so every Instant column on an axis shares one. */
-  private xInstants = new InstantAxis();
+  private xInstants: InstantAxis;
 
-  private yInstants = new InstantAxis();
+  private yInstants: InstantAxis;
 
   private instantFormatter: InstantFormatterFactory;
 
@@ -388,6 +396,8 @@ export class TableDataSource extends StaticDataSource {
     this.onViewportChange = onViewportChange;
     this.onDownsamplingChange = onDownsamplingChange;
     this.instantFormatter = instantFormatter;
+    this.xInstants = options.xInstants ?? new InstantAxis();
+    this.yInstants = options.yInstants ?? new InstantAxis();
     this.isYInstant = seriesColumns.map(() => false);
   }
 

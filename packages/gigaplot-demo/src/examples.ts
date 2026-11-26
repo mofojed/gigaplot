@@ -1,4 +1,5 @@
 import {
+  LayeredDataSource,
   createBusinessCalendarScale,
   createExponentialScale,
   createLogScale,
@@ -268,6 +269,33 @@ function movingAverage(bars: SeriesData, window: number): SeriesData {
 }
 
 /** A noisy sine wave lifted to stay above zero, for stacking. */
+/** A volume per bar, busier when the price moves further. */
+function barVolumes(bars: SeriesData, seed: number): SeriesData {
+  const random = createRandom(seed);
+  const open = bars.open as Float64Array;
+  const volumes = Array.from(
+    bars.x.subarray(0, bars.length),
+    (_x, i) => 1000 + Math.abs(bars.y[i] - open[i]) * 1500 + random() * 800,
+  );
+  return seriesDataFromArrays(
+    Array.from(bars.x.subarray(0, bars.length)),
+    volumes,
+  );
+}
+
+/** A daily cycle with noise, over `hours` starting at `start`. */
+function dailyCycle(seed: number, start: number, hours: number): SeriesData {
+  const random = createRandom(seed);
+  const x: number[] = [];
+  const y: number[] = [];
+  for (let i = 0; i <= hours * 4; i += 1) {
+    const hour = i / 4;
+    x.push(start + hour);
+    y.push(20 + 6 * Math.sin(((hour - 9) / 24) * Math.PI * 2) + random() * 1.5);
+  }
+  return seriesDataFromArrays(x, y);
+}
+
 function positiveWave(seed: number, phase: number): SeriesData {
   const wave = generateSine(2000, {
     seed,
@@ -778,6 +806,96 @@ export const examples: PlotExample[] = [
           },
         ],
         { title: "Candlestick", xAxisLabel: "Bar", yAxisLabel: "Price" },
+      );
+    },
+  },
+  {
+    id: "twin-axes",
+    name: "Twin axes",
+    description:
+      "Layers on axes of their own. Candlesticks are priced on the left, " +
+      "with their volume on the right; below, today's temperatures are " +
+      "timed along the bottom, and the same day last year along the top. " +
+      "Zooming and panning move every axis together.",
+    layout: "stack",
+    plotCount: 2,
+    plotTitles: ["Price and volume", "Today and a year ago"],
+    createSource: (index) => {
+      if (index === 0) {
+        const bars = generateOhlc(120, { seed: 13, volatility: 1.5 });
+        return new LayeredDataSource(
+          [
+            // First, so its fill is under the candles and takes the first color
+            {
+              source: new StaticDataSource([
+                {
+                  id: "volume",
+                  name: "Volume",
+                  type: "area",
+                  style: {
+                    fill: {
+                      type: "linear",
+                      stops: [{ opacity: 0.4 }, { opacity: 0 }],
+                    },
+                  },
+                  data: barVolumes(bars, 14),
+                },
+              ]),
+              yAxis: "volume",
+            },
+            {
+              source: new StaticDataSource([
+                {
+                  id: "price",
+                  name: "Price",
+                  type: "candlestick",
+                  data: bars,
+                },
+              ]),
+            },
+          ],
+          {
+            title: "Twin y axes",
+            axes: {
+              x: { label: "Bar" },
+              y: { label: "Price" },
+              volume: { label: "Volume" },
+            },
+          },
+        );
+      }
+      return new LayeredDataSource(
+        [
+          {
+            source: new StaticDataSource([
+              {
+                id: "today",
+                name: "Today",
+                type: "line",
+                data: dailyCycle(15, 0, 24),
+              },
+            ]),
+          },
+          {
+            source: new StaticDataSource([
+              {
+                id: "last-year",
+                name: "A year ago",
+                type: "line",
+                data: dailyCycle(16, 8760, 24),
+              },
+            ]),
+            xAxis: "last-year",
+          },
+        ],
+        {
+          title: "Twin x axes",
+          axes: {
+            x: { label: "Hours today" },
+            y: { label: "Temperature (°C)" },
+            "last-year": { label: "Hours since a year ago" },
+          },
+        },
       );
     },
   },

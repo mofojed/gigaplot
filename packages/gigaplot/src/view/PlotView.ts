@@ -5,13 +5,17 @@ import type {
   SeriesDataRequest,
 } from '../model/PlotDataSource';
 import {
+  PRIMARY_X_AXIS,
+  PRIMARY_Y_AXIS,
   boundsEqual,
   getSeriesBounds,
   padBounds,
   unionBounds,
   type Bounds,
+  type PlotRange,
   type PlotShape,
   type SeriesDelta,
+  type SeriesDescriptor,
 } from '../model/PlotTypes';
 import type { PlotRenderer, SeriesResolution } from '../renderers/PlotRenderer';
 import { type RendererRegistry } from '../renderers/RendererRegistry';
@@ -19,6 +23,8 @@ import { defaultRendererRegistry } from '../renderers/defaultRendererRegistry';
 import { STALE_STRETCH_THRESHOLD } from '../renderers/pixelGrid';
 import {
   fromPlotBounds,
+  getDataRange,
+  getSeriesScales,
   isLinearScale,
   linearScale,
   toPlotBounds,
@@ -35,12 +41,7 @@ import {
   type PlotThemeOverrides,
 } from '../theme/PlotTheme';
 import { observeThemeChanges } from '../theme/observeThemeChanges';
-import {
-  AxisPainter,
-  getBottomMargin,
-  getYAxisTitleWidth,
-  type PlotArea,
-} from './AxisPainter';
+import { AxisPainter, type PlotArea } from './AxisPainter';
 import { HoverPainter } from './HoverPainter';
 import { LegendPainter, type PlotLegendPosition } from './LegendPainter';
 import {
@@ -52,6 +53,13 @@ import {
   type PlotTooltipOptions,
   type ResolvedTooltipOptions,
 } from './hover';
+import {
+  getShapeAxes,
+  hasSecondaryAxis,
+  normalizeShapeAxes,
+  placeAxes,
+  type PlacedAxis,
+} from './plotAxes';
 
 const log = Log.module('PlotView');
 
@@ -162,29 +170,93 @@ export interface PlotViewEventMap {
   error: { error: unknown };
 }
 
+/** True if every axis, primary or not, is linear. */
+function isAllLinear(scales: PlotScales): boolean {
+  return (
+    isLinearScale(scales.x) &&
+    isLinearScale(scales.y) &&
+    (scales.axes == null ||
+      Array.from(scales.axes.values()).every(scale => isLinearScale(scale)))
+  );
+}
+
+/** True if both place every value on every axis in the same position. */
+function scalesEqual(a: PlotScales, b: PlotScales): boolean {
+  if (a.x !== b.x || a.y !== b.y) {
+    return false;
+  }
+  const ids = new Set([...(a.axes?.keys() ?? []), ...(b.axes?.keys() ?? [])]);
+  return Array.from(ids).every(
+    id => (a.axes?.get(id) ?? linearScale) === (b.axes?.get(id) ?? linearScale)
+  );
+}
+
 /** A hover in plot units to data units, for reporting it. */
 function hoverToData(
   hover: PlotHover | undefined,
-  { x, y }: PlotScales
+  scales: PlotScales
 ): PlotHover | undefined {
-  if (hover == null || (isLinearScale(x) && isLinearScale(y))) {
+  if (hover == null || isAllLinear(scales)) {
     return hover;
   }
-  const toY = (value: number | undefined) =>
-    value == null ? undefined : y.fromPlot(value);
   return {
-    x: x.fromPlot(hover.x),
-    y: y.fromPlot(hover.y),
-    points: hover.points.map(point => ({
-      ...point,
-      x: x.fromPlot(point.x),
-      y: y.fromPlot(point.y),
-      value: toY(point.value),
-      open: toY(point.open),
-      high: toY(point.high),
-      low: toY(point.low),
-    })),
+    x: scales.x.fromPlot(hover.x),
+    y: scales.y.fromPlot(hover.y),
+    points: hover.points.map(point => {
+      const { x, y } = getSeriesScales(point, scales);
+      const toY = (value: number | undefined) =>
+        value == null ? undefined : y.fromPlot(value);
+      return {
+        ...point,
+        x: x.fromPlot(point.x),
+        y: y.fromPlot(point.y),
+        value: toY(point.value),
+        open: toY(point.open),
+        high: toY(point.high),
+        low: toY(point.low),
+      };
+    }),
   };
+}
+
+/**
+ * How an axis besides the primary ones follows the primary axis of its
+ * dimension: its range is the primary's times `scale`, plus `offset`. Zooming
+ * and panning move the primary, and every axis with it.
+ */
+interface AxisLink {
+  scale: number;
+  offset: number;
+}
+
+/** Pads a range the way {@link padBounds} pads bounds. */
+function padRange({ min, max }: PlotRange, fraction = 0.05): PlotRange {
+  const span = max - min;
+  const pad = span > 0 ? span * fraction : 0.5;
+  return { min: min - pad, max: max + pad };
+}
+
+function unionRange(
+  range: PlotRange | undefined,
+  min: number,
+  max: number
+): PlotRange | undefined {
+  if (!Number.isFinite(min) || !Number.isFinite(max)) {
+    return range;
+  }
+  return range == null
+    ? { min, max }
+    : { min: Math.min(range.min, min), max: Math.max(range.max, max) };
+}
+
+function mapsEqual(
+  a: ReadonlyMap<string, number>,
+  b: ReadonlyMap<string, number>
+): boolean {
+  return (
+    a.size === b.size &&
+    Array.from(a).every(([key, value]) => b.get(key) === value)
+  );
 }
 
 interface SeriesState {
@@ -284,8 +356,24 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
 
   private height = 0;
 
-  /** Left margin the y tick labels need, which may exceed the theme's. */
-  private yTickLabelMargin = 0;
+  /**
+   * Space the tick labels of each y axis need, by id, where measured: for
+   * every axis besides the primary ones, and the primary one when its ticks
+   * are not plain numbers. The primary never takes less than the theme's.
+   */
+  private tickLabelMargins: ReadonlyMap<string, number> = new Map();
+
+  /** How each axis besides the primary ones follows the viewport, by id. */
+  private axisLinks = new Map<string, AxisLink>();
+
+  /** The range each axis besides the primary ones shows at home, by id. */
+  private axisHomes = new Map<string, PlotRange>();
+
+  /**
+   * True when an axis besides the primary ones has no range from the shape,
+   * so its home is fitted to the data loaded.
+   */
+  private isAxisHomeFromData = false;
 
   private frame: number | undefined;
 
@@ -452,8 +540,9 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
     if (!this.isViewportPinned) {
       this.viewport = this.homeViewport;
     }
+    this.syncAxisLinks(!this.isViewportPinned);
     renderer.setShape(shape);
-    renderer.setViewport(this.viewport);
+    this.pushViewport();
     this.emit('shapechanged', { shape: this.dataShape });
 
     this.observeSize();
@@ -515,18 +604,38 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
   }
 
   getPlotArea(): PlotArea {
-    const { margin } = this.theme;
-    const left =
-      Math.max(margin.left, this.yTickLabelMargin) +
-      getYAxisTitleWidth(this.shape, this.theme);
-    const bottom = getBottomMargin(this.shape, this.theme);
-    const right = margin.right + this.getLegendWidth();
+    return this.layoutAxes().area;
+  }
+
+  /** Lays the axes out around the plot area, and the plot area inside them. */
+  private layoutAxes(): {
+    area: PlotArea;
+    axes: Omit<PlacedAxis, 'min' | 'max'>[];
+  } {
+    const { axes, margins } = placeAxes(
+      getShapeAxes(this.shape),
+      this.theme,
+      this.tickLabelMargins
+    );
+    // The legend sits beside the plot, outside any axes on the right
+    const right = margins.right + this.getLegendWidth();
     return {
-      left,
-      top: margin.top,
-      width: Math.max(1, this.width - left - right),
-      height: Math.max(1, this.height - margin.top - bottom),
+      area: {
+        left: margins.left,
+        top: margins.top,
+        width: Math.max(1, this.width - margins.left - right),
+        height: Math.max(1, this.height - margins.top - margins.bottom),
+      },
+      axes,
     };
+  }
+
+  /** Every axis as laid out, with the range it shows, in plot units. */
+  private getPlacedAxes(): PlacedAxis[] {
+    return this.layoutAxes().axes.map(axis => {
+      const [min, max] = this.getAxisRange(axis.id, axis.dimension);
+      return { ...axis, min, max };
+    });
   }
 
   /** Space reserved beside the plot area for the legend, or 0 for an overlay. */
@@ -560,39 +669,42 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
   }
 
   /**
-   * Widens the left margin when custom y tick labels, such as dates, would not
-   * fit in it. Never narrower than the theme margin, and numeric axes keep
-   * the theme margin exactly.
+   * Fits the space beside the plot to the y tick labels: those of every axis
+   * besides the primary ones, and the primary's when they are not plain
+   * numbers, such as dates. The primary never takes less than the theme
+   * margin, and numeric primary axes keep it exactly.
    */
-  private fitYTickLabels(): void {
-    if (this.shape.yAxisTicks == null) {
-      if (this.yTickLabelMargin !== 0) {
-        this.yTickLabelMargin = 0;
-        this.layout();
-      }
-      return;
-    }
+  private fitTickLabels(): void {
     const { tickLabelPadding } = this.theme;
-    const labelWidth = this.axisPainter.measureYTickLabels(
-      this.viewport,
-      this.shape,
-      this.theme,
-      this.getPlotArea().height
-    );
-    // Rounded up so labels changing width slightly while panning do not resize
-    const labelMargin =
-      Math.ceil(
-        (labelWidth + tickLabelPadding + Y_TICK_LABEL_EDGE_GAP) /
-          Y_TICK_LABEL_MARGIN_STEP
-      ) * Y_TICK_LABEL_MARGIN_STEP;
-    if (labelMargin === this.yTickLabelMargin) {
+    const { height } = this.getPlotArea();
+    const margins = new Map<string, number>();
+    getShapeAxes(this.shape).forEach(axis => {
+      if (axis.dimension !== 'y' || (axis.isPrimary && axis.ticks == null)) {
+        return;
+      }
+      const [min, max] = this.getAxisRange(axis.id, 'y');
+      const labelWidth = this.axisPainter.measureTickLabels(
+        axis.ticks,
+        min,
+        max,
+        this.theme,
+        height
+      );
+      // Rounded up so labels changing width slightly while panning do not resize
+      margins.set(
+        axis.id,
+        Math.ceil(
+          (labelWidth + tickLabelPadding + Y_TICK_LABEL_EDGE_GAP) /
+            Y_TICK_LABEL_MARGIN_STEP
+        ) * Y_TICK_LABEL_MARGIN_STEP
+      );
+    });
+    if (mapsEqual(margins, this.tickLabelMargins)) {
       return;
     }
-    const previousLeft = this.getPlotArea().left;
-    this.yTickLabelMargin = labelMargin;
-    if (this.getPlotArea().left !== previousLeft) {
-      this.layout();
-    }
+    const previousArea = this.getPlotArea();
+    this.tickLabelMargins = margins;
+    this.layoutIfAreaChanged(previousArea);
   }
 
   getRendererName(): string | undefined {
@@ -609,6 +721,157 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
     return this.dataShape;
   }
 
+  /**
+   * The region on screen in the units of the axes a series is drawn
+   * against, which for series on the primary axes is the viewport.
+   */
+  getSeriesViewport(seriesId: string): Bounds | undefined {
+    const descriptor = this.shape.series.find(series => series.id === seriesId);
+    if (descriptor == null) {
+      return undefined;
+    }
+    return fromPlotBounds(
+      this.getSeriesViewportInPlot(descriptor),
+      getSeriesScales(descriptor, this.scales)
+    );
+  }
+
+  /** The range an axis shows, in plot units. */
+  private getAxisRange(id: string, dimension: 'x' | 'y'): [number, number] {
+    const { viewport } = this;
+    const min = dimension === 'x' ? viewport.xMin : viewport.yMin;
+    const max = dimension === 'x' ? viewport.xMax : viewport.yMax;
+    const link = this.axisLinks.get(id);
+    if (link == null) {
+      return [min, max];
+    }
+    return [min * link.scale + link.offset, max * link.scale + link.offset];
+  }
+
+  /** The region on screen in plot units of the axes a series is drawn on. */
+  private getSeriesViewportInPlot(
+    descriptor: Pick<SeriesDescriptor, 'xAxis' | 'yAxis'>
+  ): Bounds {
+    if (!hasSecondaryAxis(descriptor)) {
+      return this.viewport;
+    }
+    const [xMin, xMax] = this.getAxisRange(
+      descriptor.xAxis ?? PRIMARY_X_AXIS,
+      'x'
+    );
+    const [yMin, yMax] = this.getAxisRange(
+      descriptor.yAxis ?? PRIMARY_Y_AXIS,
+      'y'
+    );
+    return { xMin, xMax, yMin, yMax };
+  }
+
+  /** The viewports of series on axes besides the primary ones, by id. */
+  private getSeriesViewports(): ReadonlyMap<string, Bounds> | undefined {
+    let viewports: Map<string, Bounds> | undefined;
+    this.shape.series.forEach(descriptor => {
+      if (hasSecondaryAxis(descriptor)) {
+        viewports = viewports ?? new Map();
+        viewports.set(descriptor.id, this.getSeriesViewportInPlot(descriptor));
+      }
+    });
+    return viewports;
+  }
+
+  private pushViewport(): void {
+    this.renderer?.setViewport(this.viewport, this.getSeriesViewports());
+  }
+
+  /**
+   * Links each axis besides the primary ones to the viewport, so it shows its
+   * home when the viewport is at home. With `force`, every axis is linked
+   * again, as when going home; otherwise only those not yet linked are.
+   *
+   * @returns True if any link changed
+   */
+  private syncAxisLinks(force: boolean): boolean {
+    const axes = this.shape.axes ?? [];
+    const ids = new Set(axes.map(axis => axis.id));
+    let isChanged = false;
+    this.axisLinks.forEach((_link, id) => {
+      if (!ids.has(id)) {
+        this.axisLinks.delete(id);
+        isChanged = true;
+      }
+    });
+    const home = this.homeViewport;
+    axes.forEach(axis => {
+      const previous = this.axisLinks.get(axis.id);
+      if (previous != null && !force) {
+        return;
+      }
+      const isX = axis.dimension === 'x';
+      const homeMin = isX ? home.xMin : home.yMin;
+      const homeMax = isX ? home.xMax : home.yMax;
+      const target = this.axisHomes.get(axis.id) ?? {
+        min: homeMin,
+        max: homeMax,
+      };
+      let scale = (target.max - target.min) / (homeMax - homeMin);
+      if (!(Number.isFinite(scale) && scale > 0)) {
+        scale = 1;
+      }
+      const link = { scale, offset: target.min - scale * homeMin };
+      if (
+        previous == null ||
+        previous.scale !== link.scale ||
+        previous.offset !== link.offset
+      ) {
+        this.axisLinks.set(axis.id, link);
+        isChanged = true;
+      }
+    });
+    return isChanged;
+  }
+
+  /** The data range each linked axis shows, to keep it through a rescale. */
+  private getAxisDataRanges(): Map<string, [number, number]> {
+    const ranges = new Map<string, [number, number]>();
+    (this.shape.axes ?? []).forEach(axis => {
+      if (this.axisLinks.has(axis.id)) {
+        const [min, max] = this.getAxisRange(axis.id, axis.dimension);
+        const scale = this.scales.axes?.get(axis.id) ?? linearScale;
+        ranges.set(axis.id, getDataRange(scale, min, max));
+      }
+    });
+    return ranges;
+  }
+
+  /**
+   * Links axes to show the data ranges they showed before a rescale, or
+   * drops their links, to link them again from home, where a range no
+   * longer has a place on the axis.
+   */
+  private restoreAxisDataRanges(ranges: Map<string, [number, number]>): void {
+    const { viewport } = this;
+    (this.shape.axes ?? []).forEach(axis => {
+      const range = ranges.get(axis.id);
+      if (range == null) {
+        return;
+      }
+      const scale = this.scales.axes?.get(axis.id) ?? linearScale;
+      const min = scale.toPlot(range[0]);
+      const max = scale.toPlot(range[1]);
+      const isX = axis.dimension === 'x';
+      const viewMin = isX ? viewport.xMin : viewport.yMin;
+      const viewMax = isX ? viewport.xMax : viewport.yMax;
+      const linkScale = (max - min) / (viewMax - viewMin);
+      if (Number.isFinite(linkScale) && linkScale > 0) {
+        this.axisLinks.set(axis.id, {
+          scale: linkScale,
+          offset: min - linkScale * viewMin,
+        });
+      } else {
+        this.axisLinks.delete(axis.id);
+      }
+    });
+  }
+
   /** The scale of each axis: the options', else the shape's, else linear. */
   getScales(): PlotScales {
     return this.scales;
@@ -616,10 +879,16 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
 
   /** The scales the options and a shape call for. */
   private resolveScales(shape: PlotShape): PlotScales {
-    return {
+    const scales: PlotScales = {
       x: this.options.xScale ?? shape.xScale ?? linearScale,
       y: this.options.yScale ?? shape.yScale ?? linearScale,
     };
+    if (shape.axes != null && shape.axes.length > 0) {
+      scales.axes = new Map(
+        shape.axes.map(axis => [axis.id, axis.scale ?? linearScale])
+      );
+    }
+    return scales;
   }
 
   /**
@@ -627,21 +896,32 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
    *
    * @returns True if the scales changed
    */
-  private setDataShape(shape: PlotShape): boolean {
+  private setDataShape(sourceShape: PlotShape): boolean {
+    const shape = normalizeShapeAxes(sourceShape);
     const scales = this.resolveScales(shape);
-    const isRescaled = scales.x !== this.scales.x || scales.y !== this.scales.y;
+    const isRescaled = !scalesEqual(scales, this.scales);
     const previousViewport = isRescaled
       ? fromPlotBounds(this.viewport, this.scales)
       : undefined;
+    const previousAxisRanges = isRescaled
+      ? this.getAxisDataRanges()
+      : undefined;
     this.dataShape = shape;
-    this.scales = scales;
-    this.shape = toPlotShape(shape, scales);
+    // Scales that place everything the same are kept, so data in flight for
+    // them is still drawn
+    if (isRescaled) {
+      this.scales = scales;
+    }
+    this.shape = toPlotShape(shape, this.scales);
     if (previousViewport != null) {
       // Keep showing the same data under the new scales
       const viewport = toPlotBounds(previousViewport, scales);
       if (viewport != null) {
         this.viewport = viewport;
       }
+    }
+    if (previousAxisRanges != null) {
+      this.restoreAxisDataRanges(previousAxisRanges);
     }
     return isRescaled;
   }
@@ -670,8 +950,9 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
     if (!this.isViewportPinned) {
       this.viewport = this.homeViewport;
     }
-    this.renderer?.setViewport(this.viewport);
-    this.yTickLabelMargin = 0;
+    this.syncAxisLinks(!this.isViewportPinned);
+    this.pushViewport();
+    this.tickLabelMargins = new Map();
     this.layoutIfAreaChanged(previousArea);
     this.emit('viewportchanged', { viewport: this.getViewport() });
     this.scheduleDataRequest();
@@ -683,6 +964,7 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
    * loaded, for bounds that have no position on a scale.
    */
   private updateHomeViewport(): void {
+    this.updateAxisHomes();
     const { bounds } = this.shape;
     this.isHomeFromData = bounds == null && this.dataShape.bounds != null;
     if (bounds != null) {
@@ -701,6 +983,49 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
     }
     this.homeViewport =
       dataBounds != null ? padBounds(dataBounds) : DEFAULT_VIEWPORT;
+  }
+
+  /**
+   * Home for each axis besides the primary ones: its range, or else the
+   * union of the bounds of its series, or else of the data loaded for them.
+   */
+  private updateAxisHomes(): void {
+    const homes = new Map<string, PlotRange>();
+    let isFromData = false;
+    const { renderer } = this;
+    (this.shape.axes ?? []).forEach(axis => {
+      const isX = axis.dimension === 'x';
+      const series = this.shape.series.filter(descriptor =>
+        isX ? descriptor.xAxis === axis.id : descriptor.yAxis === axis.id
+      );
+      let range = axis.range;
+      if (range == null) {
+        series.forEach(({ bounds }) => {
+          if (bounds != null) {
+            range = isX
+              ? unionRange(range, bounds.xMin, bounds.xMax)
+              : unionRange(range, bounds.yMin, bounds.yMax);
+          }
+        });
+      }
+      if (range == null && series.length > 0) {
+        isFromData = true;
+        series.forEach(({ id }) => {
+          const data = renderer?.getSeriesData?.(id);
+          const bounds = data != null ? getSeriesBounds(data) : undefined;
+          if (bounds != null) {
+            range = isX
+              ? unionRange(range, bounds.xMin, bounds.xMax)
+              : unionRange(range, bounds.yMin, bounds.yMax);
+          }
+        });
+      }
+      if (range != null) {
+        homes.set(axis.id, padRange(range));
+      }
+    });
+    this.axisHomes = homes;
+    this.isAxisHomeFromData = isFromData;
   }
 
   getTheme(): PlotTheme {
@@ -783,12 +1108,16 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
     this.applyViewport(viewport);
   }
 
-  private applyViewport(viewport: Bounds): void {
-    if (boundsEqual(viewport, this.viewport)) {
+  /**
+   * Shows a region in plot units. `force` applies it even if the viewport is
+   * already there, for when the axes besides the primary ones have moved.
+   */
+  private applyViewport(viewport: Bounds, force = false): void {
+    if (!force && boundsEqual(viewport, this.viewport)) {
       return;
     }
     this.viewport = viewport;
-    this.renderer?.setViewport(viewport);
+    this.pushViewport();
     this.emit('viewportchanged', { viewport: this.getViewport() });
     // A series the renderer holds in full cannot yield more data for a new
     // viewport, so panning and zooming it costs nothing but a redraw
@@ -806,7 +1135,13 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
 
   resetViewport(): void {
     this.isViewportPinned = false;
-    this.applyViewport(this.homeViewport);
+    this.applyHome();
+  }
+
+  /** Shows home, with every axis at its own home. */
+  private applyHome(): void {
+    const isLinked = this.syncAxisLinks(true);
+    this.applyViewport(this.homeViewport, isLinked);
   }
 
   /**
@@ -896,7 +1231,7 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
   }
 
   private renderData(): void {
-    this.fitYTickLabels();
+    this.fitTickLabels();
     const now = performance.now();
     const overlay = this.updatePendingOverlay(now);
     this.axisPainter.paint(
@@ -911,7 +1246,8 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
         : {
             ranges: overlay.ranges,
             opacity: this.getPendingOpacity(overlay, now),
-          }
+          },
+      this.getPlacedAxes()
     );
     this.legendPainter.paint(
       this.width,
@@ -936,6 +1272,7 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
   private renderHover(): void {
     const { pointer, renderer } = this;
     const area = this.getPlotArea();
+    const seriesViewports = this.getSeriesViewports();
     let hover: PlotHover | undefined;
     if (
       pointer != null &&
@@ -945,6 +1282,7 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
       hover = findHover({
         shape: this.shape,
         viewport: this.viewport,
+        seriesViewports,
         area,
         cursor: { x: pointer.x - area.left, y: pointer.y - area.top },
         theme: this.theme,
@@ -959,6 +1297,8 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
       height: this.height,
       area,
       viewport: this.viewport,
+      seriesViewports,
+      axes: this.getPlacedAxes(),
       shape: this.shape,
       theme: this.theme,
       hover,
@@ -978,22 +1318,22 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
   private toPlotStackedValues(
     hover: PlotHover | undefined
   ): PlotHover | undefined {
-    const { y } = this.scales;
-    if (hover == null || isLinearScale(y)) {
+    if (hover == null || isAllLinear(this.scales)) {
       return hover;
     }
     return {
       ...hover,
-      points: hover.points.map(point =>
-        point.value == null
+      points: hover.points.map(point => {
+        const { y } = getSeriesScales(point, this.scales);
+        return point.value == null || isLinearScale(y)
           ? point
           : {
               ...point,
               value: y.toPlot(
                 y.fromPlot(point.y) - y.fromPlot(point.y - point.value)
               ),
-            }
-      ),
+            };
+      }),
     };
   }
 
@@ -1018,11 +1358,21 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
     for (let i = 0; i < this.shape.series.length; i += 1) {
       const descriptor = this.shape.series[i];
       const state = this.seriesStates.get(descriptor.id);
-      const bounds = descriptor.bounds ?? this.shape.bounds;
+      const isPrimaryX =
+        descriptor.xAxis == null || descriptor.xAxis === PRIMARY_X_AXIS;
+      const bounds =
+        descriptor.bounds ?? (isPrimaryX ? this.shape.bounds : undefined);
       if (state != null && !state.complete && bounds != null) {
-        const low = Math.max(xMin, bounds.xMin);
-        const high = Math.min(xMax, bounds.xMax);
-        const { min, max } = state.xCoverage;
+        // Ranges on another x axis are hatched where they fall on the primary
+        const link = isPrimaryX
+          ? undefined
+          : this.axisLinks.get(descriptor.xAxis as string);
+        const toPrimary = (value: number): number =>
+          link == null ? value : (value - link.offset) / link.scale;
+        const low = Math.max(xMin, toPrimary(bounds.xMin));
+        const high = Math.min(xMax, toPrimary(bounds.xMax));
+        const min = toPrimary(state.xCoverage.min);
+        const max = toPrimary(state.xCoverage.max);
         add(low, Math.min(high, min));
         add(Math.max(low, max), high);
       }
@@ -1079,19 +1429,23 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
     return overlay.clearedAt != null ? opacity > 0 : opacity < 1;
   }
 
-  /** Data units per CSS pixel on screen, on each axis. */
-  private getScreenPerPixel(): { x: number; y: number } {
+  /** Plot units of a viewport per CSS pixel on screen, on each axis. */
+  private getScreenPerPixel(viewport = this.viewport): {
+    x: number;
+    y: number;
+  } {
     const { width, height } = this.getPlotArea();
-    const { viewport } = this;
     return {
       x: width > 0 ? (viewport.xMax - viewport.xMin) / width : 0,
       y: height > 0 ? (viewport.yMax - viewport.yMin) / height : 0,
     };
   }
 
-  /** How far the viewport is zoomed in past the resolution of a series' data. */
-  private getStretch(state: SeriesState): number {
-    const { x } = this.getScreenPerPixel();
+  /**
+   * How far a series' viewport is zoomed in past the resolution of its data.
+   */
+  private getStretch(state: SeriesState, viewport: Bounds): number {
+    const { x } = this.getScreenPerPixel(viewport);
     return x > 0 ? state.xPerPixel / x : 1;
   }
 
@@ -1140,16 +1494,17 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
    * out under it to the renderer. Returns true while anything is still fading.
    */
   private updateSeriesResolutions(now: number): boolean {
-    const { renderer, viewport } = this;
-    const screen = this.getScreenPerPixel();
+    const { renderer } = this;
     let isFading = false;
     for (let i = 0; i < this.shape.series.length; i += 1) {
-      const { id } = this.shape.series[i];
+      const descriptor = this.shape.series[i];
+      const { id } = descriptor;
       const state = this.seriesStates.get(id);
       if (state != null) {
-        if (this.getStretch(state) < STALE_STRETCH_THRESHOLD) {
+        const viewport = this.getSeriesViewportInPlot(descriptor);
+        if (this.getStretch(state, viewport) < STALE_STRETCH_THRESHOLD) {
           state.yOrigin = viewport.yMin;
-          state.yPerPixel = screen.y;
+          state.yPerPixel = this.getScreenPerPixel(viewport).y;
         }
         renderer?.setSeriesResolution?.(id, this.getResolution(state));
         if (state.fadeStart != null) {
@@ -1181,22 +1536,24 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
     const revision = this.requestRevision;
     const area = this.getPlotArea();
     const pixelSize = { width: area.width, height: area.height };
-    const { viewport, scales } = this;
-    const dataViewport = fromPlotBounds(viewport, scales);
-    const xPerPixel = (viewport.xMax - viewport.xMin) / area.width;
+    const { scales } = this;
 
     this.container.setAttribute('data-dh-plot-status', 'loading');
     this.pendingRequests += 1;
 
     const requests = this.shape.series.map(async descriptor => {
+      // Each series is asked for in the units of the axes it is drawn on
+      const viewport = this.getSeriesViewportInPlot(descriptor);
+      const seriesScales = getSeriesScales(descriptor, scales);
+      const xPerPixel = (viewport.xMax - viewport.xMin) / area.width;
       const request: SeriesDataRequest = {
         seriesId: descriptor.id,
-        viewport: dataViewport,
+        viewport: fromPlotBounds(viewport, seriesScales),
         pixelSize,
         style: descriptor.style ?? {},
         signal: abortController.signal,
-        ...(isLinearScale(scales.x) ? {} : { xScale: scales.x }),
-        ...(isLinearScale(scales.y) ? {} : { yScale: scales.y }),
+        ...(isLinearScale(seriesScales.x) ? {} : { xScale: seriesScales.x }),
+        ...(isLinearScale(seriesScales.y) ? {} : { yScale: seriesScales.y }),
       };
       const result = await this.source.requestSeriesData(request);
       const { renderer } = this;
@@ -1211,8 +1568,8 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
         const previous = this.seriesStates.get(id);
         const xResolution = result.xResolution ?? xPerPixel;
         const coverage = result.xCoverage;
-        const coverageMin = coverage && scales.x.toPlot(coverage.min);
-        const coverageMax = coverage && scales.x.toPlot(coverage.max);
+        const coverageMin = coverage && seriesScales.x.toPlot(coverage.min);
+        const coverageMax = coverage && seriesScales.x.toPlot(coverage.max);
         const state: SeriesState = {
           complete: result.complete,
           xPerPixel: xResolution,
@@ -1225,11 +1582,11 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
               : { min: viewport.xMin, max: viewport.xMax },
           // Scale the y grid with the x resolution, so lines of data that is
           // still stale stay as thick relative to its blocks as before
-          yOrigin: previous?.yOrigin ?? this.viewport.yMin,
+          yOrigin: previous?.yOrigin ?? viewport.yMin,
           yPerPixel:
             previous != null
               ? previous.yPerPixel * (xResolution / previous.xPerPixel)
-              : this.getScreenPerPixel().y,
+              : this.getScreenPerPixel(viewport).y,
           fadeStart: previous?.fadeStart,
         };
         // Finer data fills in over the stale data it replaces, which fades out
@@ -1238,13 +1595,14 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
           renderer.retainSeriesData != null &&
           this.getResolution(previous) != null &&
           xResolution < previous.xPerPixel &&
-          this.getStretch(previous) >= STALE_STRETCH_THRESHOLD
+          this.getStretch(previous, this.getSeriesViewportInPlot(descriptor)) >=
+            STALE_STRETCH_THRESHOLD
         ) {
           renderer.retainSeriesData(id);
           state.fadeStart = performance.now();
         }
         this.seriesStates.set(id, state);
-        renderer.setSeriesData(id, toPlotSeriesData(result.data, scales));
+        renderer.setSeriesData(id, toPlotSeriesData(result.data, seriesScales));
         renderer.setSeriesResolution?.(id, this.getResolution(state));
       }
     });
@@ -1273,13 +1631,16 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
    * on the scales, and follows it there until the user takes control.
    */
   private fitHomeToData(): void {
-    if (!this.isHomeFromData) {
+    if (!this.isHomeFromData && !this.isAxisHomeFromData) {
       return;
     }
     const previous = this.homeViewport;
     this.updateHomeViewport();
-    if (!this.isViewportPinned && !boundsEqual(previous, this.homeViewport)) {
-      this.applyViewport(this.homeViewport);
+    if (!this.isViewportPinned) {
+      const isLinked = this.syncAxisLinks(true);
+      if (isLinked || !boundsEqual(previous, this.homeViewport)) {
+        this.applyViewport(this.homeViewport, isLinked);
+      }
     }
   }
 
@@ -1320,14 +1681,25 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
     this.renderer?.setShape(this.shape);
     // Axis titles and a legend beside the plot change the space around the data
     this.layoutIfAreaChanged(previousArea);
+    let isLinked: boolean;
     if (this.shape.bounds != null) {
       this.updateHomeViewport();
+      isLinked = this.syncAxisLinks(!this.isViewportPinned);
       // Until the user takes control, keep newly appended data in view
       if (!this.isViewportPinned) {
-        this.applyViewport(this.homeViewport);
+        this.applyViewport(this.homeViewport, isLinked);
       }
-    } else if (shape.bounds != null) {
-      this.isHomeFromData = true;
+    } else {
+      if (shape.bounds != null) {
+        this.isHomeFromData = true;
+      }
+      this.updateAxisHomes();
+      isLinked = this.syncAxisLinks(!this.isViewportPinned);
+    }
+    // Series may have moved to other axes, or their axes may have moved
+    this.pushViewport();
+    if (isLinked) {
+      this.scheduleDataRequest();
     }
     this.emit('shapechanged', { shape });
     this.invalidate();
@@ -1345,11 +1717,20 @@ export class PlotView extends PlotEventEmitter<PlotViewEventMap> {
     );
     if (applicable.length > 0) {
       const { scales } = this;
+      const descriptors = new Map(
+        this.shape.series.map(descriptor => [descriptor.id, descriptor])
+      );
       renderer.applyDeltas(
         applicable.map(delta =>
           delta.type === 'clear' || delta.type === 'trimStart'
             ? delta
-            : { ...delta, data: toPlotSeriesData(delta.data, scales) }
+            : {
+                ...delta,
+                data: toPlotSeriesData(
+                  delta.data,
+                  getSeriesScales(descriptors.get(delta.seriesId) ?? {}, scales)
+                ),
+              }
         )
       );
       this.fitHomeToData();

@@ -15,14 +15,15 @@ The `src` directory contains the Python and JavaScript code for the plugin.
 Within the `src` directory, the deephaven_plugin_gigaplot directory contains the Python code, and the `js` directory contains the JavaScript code.
 
 The Python files have the following structure:  
-`gigaplot.py` defines the `line`, `scatter`, `area`, `ohlc`, and `candlestick` plots. Each renders the same component, which maps to the `GigaplotView` React element. It holds the plot's viewport as state and downsamples the table for it. It also defines `scatter3d` and `line3d`, which send the whole table, since 3D plots are not downsampled.  
+`gigaplot.py` defines the `line`, `scatter`, `area`, `ohlc`, and `candlestick` plots, and `layer`, which draws them together. Each is a `Plot` of layers, which renders the element that maps to the `GigaplotView` React element. For each layer, it holds the viewport as state and downsamples the layer's table for it. It also defines `scatter3d` and `line3d`, which send the whole table, since 3D plots are not downsampled.  
 `downsample.py` turns a table into a smaller table that draws the same at a given viewport and resolution.  
 `scales.py` defines the axis scales, such as `log_scale` and `calendar_scale`, and the formulas the server bins by.  
 `register.py` registers the plugin with Deephaven.
 
 The JavaScript files have the following structure:  
 `GigaplotPlugin.ts` registers the plugin with Deephaven. Its `mapping` keys must match the element names in `gigaplot.py`.  
-`GigaplotView.tsx` fetches the tables passed from Python and renders a gigaplot `Plot`.  
+`GigaplotView.tsx` renders a 2D plot with `LayeredGigaplotView.tsx`, and fetches the table of a 3D plot and renders a gigaplot `Plot3D`.  
+`LayeredGigaplotView.tsx` makes a `TableDataSource` per layer, fetches the tables passed from Python into them, and renders a gigaplot `Plot` of them all, through gigaplot's `LayeredDataSource`.  
 `TableDataSource.ts` is a gigaplot data source that subscribes to the table and replaces every series on each update. When downsampling, it asks Python for a new table as the plot zooms, pans, and resizes, and swaps it in once it has data.  
 `downsampleParams.ts` turns a viewport and plot size into the params sent to Python.  
 `DownsamplingIndicator.tsx` is the status shown while a downsampled table is loading.
@@ -160,7 +161,7 @@ For a tour of everything below in one `deephaven.ui` dashboard, with live market
 
 ![The showcase dashboard with other tabs open: a 6 million point galaxy, the Lorenz attractor in 3D, venue share as a percent stacked area, and growth on a log axis](./_assets/showcase-dashboard-tabs.png)
 
-There is a function per plot type, like `deephaven.plot.express`: `gp.line`, `gp.scatter`, `gp.area`, `gp.ohlc`, and `gp.candlestick`, and in 3D `gp.scatter3d` and `gp.line3d`. They share the options below, except where [3D plots](#3d-plots) say otherwise. 2D plots also take `x_scale` and `y_scale`, for [market hours and other scales](#market-hours-and-other-scales).
+There is a function per plot type, like `deephaven.plot.express`: `gp.line`, `gp.scatter`, `gp.area`, `gp.ohlc`, and `gp.candlestick`, and in 3D `gp.scatter3d` and `gp.line3d`. They share the options below, except where [3D plots](#3d-plots) say otherwise. 2D plots also take `x_scale` and `y_scale`, for [market hours and other scales](#market-hours-and-other-scales), and `x_axis` and `y_axis`, to [layer them](#layers-and-twin-axes) with `gp.layer`.
 
 Numeric and `Instant` columns are supported.
 `Instant` values keep full nanosecond precision, and their axis is labelled with dates in the time zone and date time format from your workspace settings, including any format rule for the column. The labels show more fractional seconds when you zoom in far enough to need them.
@@ -324,6 +325,76 @@ ticks_plot = gp.candlestick(ticks, x="Timestamp", open="Price", high="Price", lo
 ```
 
 When there are more bars than fit, neighbouring bars are combined into longer periods, so bars stay 4 to 8 pixels apart: each combined bar has the first open, the highest high, the lowest low, and the last close of the bars it covers. Zoom in and the original bars come back.
+
+### Layers and twin axes
+
+`gp.layer` draws 2D plots on top of each other, bottom first. Each plot keeps its own table, type, and downsampling, so the tables can differ, and a line can be drawn over a scatter, or volume under candles. Plots name the axes they are drawn against with `x_axis` and `y_axis`, and plots naming the same axis share it:
+
+- `"left"` and `"bottom"`, the defaults, are the first y and x axes, named `"y"` and `"x"`.
+- `"right"` is a second y axis on the right, named `"y2"`, and `"top"` a second x axis along the top, named `"x2"`.
+- Any other string names an axis of your own, which is drawn on the right, or along the top, after the others there.
+- `gp.axis(side=..., title=..., scale=...)` is an axis of its own, with those settings. Pass the same one to several plots to share it.
+
+Zooming and panning move every axis together, and double clicking takes each back to its own data. Hovering lists every layer's values, each in the units of its axis, and labels them on the axes they are drawn against.
+
+```python
+from deephaven import agg, empty_table
+from deephaven.updateby import cum_sum
+import deephaven_plugin_gigaplot as gp
+
+def session(start):
+    """A random walk with one tick per second, for a six hour session from `start`."""
+    return (
+        empty_table(6 * 60 * 60)
+        .update([f"Timestamp = '{start}' + ii * SECOND", "Change = randomGaussian(0.0, 0.02)", "Size = randomInt(1, 500)"])
+        .update_by(cum_sum("Walk = Change"))
+        .update("Price = 100.0 + Walk")
+    )
+
+
+ticks = session("2024-01-02T09:30:00 ET")
+bars = ticks.update_view("Minute = lowerBin(Timestamp, MINUTE)").agg_by(
+    [agg.first("Open = Price"), agg.max_("High = Price"), agg.min_("Low = Price"), agg.last("Close = Price"), agg.sum_("Volume = Size")],
+    by="Minute",
+)
+trades = ticks.where("ii % 97 == 0")
+
+# Two plots on the same axes: trades over every tick
+trades_plot = gp.layer(
+    gp.line(ticks, x="Timestamp", y="Price"),
+    gp.scatter(trades, x="Timestamp", y="Price"),
+    title="Trades",
+)
+
+# Candles priced on the left, and volume on the right
+volume_plot = gp.layer(
+    gp.area(bars, x="Minute", y="Volume", y_axis="right", y_title="Volume", fill=gp.linear_gradient([{"opacity": 0.4}, {"opacity": 0}])),
+    gp.candlestick(bars, x="Minute", open="Open", high="High", low="Low", close="Close", y_title="Price"),
+)
+
+# Today along the bottom, and the same session a week earlier along the top
+earlier = session("2023-12-26T09:30:00 ET")
+compare_plot = gp.layer(
+    gp.line(ticks, x="Timestamp", y="Price", x_title="Today"),
+    gp.line(earlier, x="Timestamp", y="Price", x_axis="top", x_title="A week ago"),
+)
+```
+
+Axis settings come from the plots on the axis, the first one to set a title or scale giving it to the axis. Plots on one axis cannot give it different scales. To set an axis directly, or configure axes by name, pass `x_axes` or `y_axes` to `gp.layer`:
+
+```python
+three_axes_plot = gp.layer(
+    gp.line(bars, x="Minute", y="Close"),
+    gp.area(bars, x="Minute", y="Volume", y_axis="volume"),
+    gp.line(bars.update_view("Range = High - Low"), x="Minute", y="Range", y_axis="range"),
+    y_axes={
+        "volume": gp.axis(side="right", title="Volume", scale="log"),
+        "range": gp.axis(side="right", title="Range"),
+    },
+)
+```
+
+`gp.layer` takes `title`, `tooltip`, and `legend_position` too, and otherwise uses the first plot's. A layered plot can be layered again.
 
 ### 3D plots
 

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Sequence, TypedDict, Union
 
 from deephaven import ui
 from deephaven.table import Table
+from deephaven.ui.elements import FunctionElement
 
 from .scales import Scale, ScaleLike, _parse_scale
 from .downsample import (
@@ -17,15 +19,21 @@ from .downsample import (
 )
 
 __all__ = [
+    "Axis",
+    "AxisRef",
+    "AxisSide",
     "Camera",
     "Fill",
     "GradientStop",
     "LegendPosition",
     "LinearGradient",
+    "Plot",
     "PointScaling",
     "TooltipPart",
     "area",
+    "axis",
     "candlestick",
+    "layer",
     "line",
     "line3d",
     "linear_gradient",
@@ -275,20 +283,6 @@ def _parse_tooltip(tooltip: bool | Sequence[TooltipPart]) -> bool | list[str]:
     return parts
 
 
-def _parse_scales(x_scale: ScaleLike, y_scale: ScaleLike) -> dict[str, Scale]:
-    """The scales that are not linear, by viewport key. Calendars only fit x."""
-    scales: dict[str, Scale] = {}
-    parsed_x = _parse_scale(x_scale, "x")
-    if parsed_x is not None:
-        scales["x_scale"] = parsed_x
-    parsed_y = _parse_scale(y_scale, "y")
-    if parsed_y is not None:
-        if parsed_y.supports_instants:
-            raise ValueError("Calendar and break scales only fit the x axis")
-        scales["y_scale"] = parsed_y
-    return scales
-
-
 def _parse_origin(key: str, value: Any) -> int:
     """Origins are epoch nanoseconds, kept as exact ints since a float would round them."""
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
@@ -346,37 +340,388 @@ def _unique_ohlc(
     return (table.update_view(aliases) if aliases else table), unique
 
 
-@ui.component
-def _plot(
-    table: Table,
-    x: str,
-    type: SeriesType,
-    y: tuple[str, ...] | None,
-    ohlc: tuple[tuple[str, ...], ...] | None,
-    title: str | None,
-    x_title: str | None,
-    y_title: str | None,
-    downsample: bool | Downsampler,
-    tooltip: bool | Sequence[TooltipPart],
-    legend_position: LegendPosition,
-    stacked: bool = False,
-    groupnorm: GroupNorm | None = None,
-    fill: tuple[Fill | None, ...] | None = None,
-    x_scale: ScaleLike = None,
-    y_scale: ScaleLike = None,
-) -> ui.BaseElement:
+AxisSide = Literal["left", "right", "top", "bottom"]
+"""The edge of the plot an axis is drawn along."""
+
+_X_SIDES = ("bottom", "top")
+_Y_SIDES = ("left", "right")
+
+# Sides an axis can be named by, and the axis each one names
+_SIDE_AXES = {"bottom": "x", "top": "x2", "left": "y", "right": "y2"}
+
+
+@dataclass(frozen=True)
+class Axis:
+    """Settings for an axis of a plot. Make one with :func:`axis`."""
+
+    side: AxisSide | None = None
+    title: str | None = None
+    scale: ScaleLike = None
+
+
+AxisRef = Union[str, Axis]
+"""
+An axis to draw a plot against: a side, such as ``"right"``, for the axis
+along it, a name of your own, or an :class:`Axis`.
+"""
+
+
+def axis(
+    side: AxisSide | None = None,
+    title: str | None = None,
+    scale: ScaleLike = None,
+) -> Axis:
     """
-    The element every plot renders. Exactly one of ``y``, for line, scatter,
-    and area plots, and ``ohlc``, the open, high, low, and close columns of
-    OHLC and candlestick plots, is set. ``stacked``, ``groupnorm``, and
-    ``fill`` are only used by area plots.
+    Settings for an axis, to draw a plot against with ``x_axis`` or
+    ``y_axis``, or to configure an axis by name with :func:`layer`.
+
+    Args:
+        side: The edge to draw the axis along: "left" or "right" for a y axis,
+            and "bottom" or "top" for an x axis. Defaults to the left and
+            bottom for the first y and x axes, and to the right and top for
+            the rest. Axes sharing an edge are drawn side by side.
+        title: Title of the axis. Defaults to the first title a plot on it
+            gives, and then to its first plot's column. Pass an empty string to
+            hide it.
+        scale: How values map to positions along the axis, as ``x_scale`` and
+            ``y_scale`` take. Defaults to the scale its plots give it.
+
+    Returns:
+        The axis settings.
     """
-    tooltip_parts = _parse_tooltip(tooltip)
-    scales = _parse_scales(x_scale, y_scale)
+    if side is not None and side not in _SIDE_AXES:
+        raise ValueError(
+            f"side must be one of {list(_SIDE_AXES)} or None, got {side!r}"
+        )
+    return Axis(side, title, scale)
+
+
+@dataclass(frozen=True)
+class _Layer:
+    """One plot call: a table, its columns, and the axes it is drawn against."""
+
+    table: Table
+    x: str
+    type: SeriesType
+    # Exactly one of y, for line, scatter, and area plots, and ohlc, the
+    # open, high, low, and close columns of bars, is set
+    y: tuple[str, ...] | None
+    ohlc: tuple[tuple[str, ...], ...] | None
+    x_axis: AxisRef | None
+    y_axis: AxisRef | None
+    x_title: str | None
+    y_title: str | None
+    x_scale: ScaleLike
+    y_scale: ScaleLike
+    downsample: bool | Downsampler
+    stacked: bool = False
+    groupnorm: GroupNorm | None = None
+    fill: tuple[Fill | None, ...] | None = None
+
+
+@dataclass(frozen=True)
+class _ResolvedAxis:
+    side: AxisSide
+    title: str | None
+    scale: Scale | None
+
+
+@dataclass(frozen=True)
+class _ResolvedPlot:
+    """A plot with every axis named, placed, titled, and scaled."""
+
+    layers: tuple[tuple[_Layer, str, str], ...]
+    axes: tuple[tuple[str, _ResolvedAxis], ...]
+    title: str | None
+    tooltip: bool | list[str]
+    legend_position: LegendPosition
+
+
+def _parse_axis_scale(axis_id: str, dimension: str, scale: ScaleLike) -> Scale | None:
+    parsed = _parse_scale(scale, dimension)
+    if parsed is not None and dimension == "y" and parsed.supports_instants:
+        raise ValueError(
+            f"Calendar and break scales only fit x axes, not y axis {axis_id!r}"
+        )
+    return parsed
+
+
+def _resolve_plot(plot: Plot) -> _ResolvedPlot:
+    """
+    Names every axis the layers are drawn against, and settles each axis'
+    side, title, and scale: from the plot's ``x_axes`` and ``y_axes``, then an
+    :class:`Axis` a layer passes, then the first layer on it that sets one.
+    """
+    dimensions: dict[str, str] = {}
+    sides: dict[str, AxisSide] = {}
+    settings: dict[str, Axis] = {}
+    anonymous: dict[int, str] = {}
+
+    def name(ref: AxisRef | None, dimension: str) -> str:
+        if ref is None:
+            axis_id = dimension
+        elif isinstance(ref, Axis):
+            # The same Axis passed to several layers is one axis
+            axis_id = anonymous.get(id(ref), "")
+            if not axis_id:
+                axis_id = f"{dimension}-axis-{len(anonymous) + 1}"
+                anonymous[id(ref)] = axis_id
+                settings[axis_id] = ref
+        elif isinstance(ref, str) and ref:
+            if ref in _SIDE_AXES:
+                if ref not in (_X_SIDES if dimension == "x" else _Y_SIDES):
+                    raise ValueError(
+                        f"A {dimension} axis cannot be on the {ref}; use "
+                        f"{' or '.join(repr(s) for s in (_X_SIDES if dimension == 'x' else _Y_SIDES))}"
+                    )
+                axis_id = _SIDE_AXES[ref]
+                sides.setdefault(axis_id, ref)
+            else:
+                axis_id = ref
+        else:
+            raise ValueError(
+                f"{dimension}_axis must be a side, an axis name, or an axis(), got {ref!r}"
+            )
+        known = dimensions.setdefault(axis_id, dimension)
+        if known != dimension:
+            raise ValueError(f"Axis {axis_id!r} cannot be both an x and a y axis")
+        return axis_id
+
+    named = tuple(
+        (layer, name(layer.x_axis, "x"), name(layer.y_axis, "y"))
+        for layer in plot.layers
+    )
+    for dimension, configured in (("x", plot.x_axes), ("y", plot.y_axes)):
+        for axis_id, settings_for in configured.items():
+            if not isinstance(settings_for, Axis):
+                raise ValueError(
+                    f"{dimension}_axes[{axis_id!r}] must be an axis(), got {settings_for!r}"
+                )
+            if dimensions.get(axis_id) != dimension:
+                raise ValueError(
+                    f"{dimension}_axes names {axis_id!r}, which no plot is drawn against as a {dimension} axis"
+                )
+            settings[axis_id] = settings_for
+
+    axes: dict[str, _ResolvedAxis] = {}
+    for axis_id, dimension in dimensions.items():
+        is_x = dimension == "x"
+        on_axis = [
+            layer for layer, x_id, y_id in named if (x_id if is_x else y_id) == axis_id
+        ]
+        configured = settings.get(axis_id)
+        side = configured.side if configured is not None else None
+        if side is not None and side not in (_X_SIDES if is_x else _Y_SIDES):
+            raise ValueError(f"A {dimension} axis cannot be on the {side}")
+        if side is None:
+            side = sides.get(axis_id)
+        if side is None:
+            side = (
+                ("bottom" if is_x else "left")
+                if axis_id == dimension
+                else ("top" if is_x else "right")
+            )
+        title = configured.title if configured is not None else None
+        if title is None:
+            title = next(
+                (
+                    layer_title
+                    for layer_title in (
+                        layer.x_title if is_x else layer.y_title for layer in on_axis
+                    )
+                    if layer_title is not None
+                ),
+                None,
+            )
+        scale = (
+            _parse_axis_scale(axis_id, dimension, configured.scale)
+            if configured is not None and configured.scale is not None
+            else None
+        )
+        if scale is None:
+            layer_scales = [
+                _parse_axis_scale(
+                    axis_id, dimension, layer.x_scale if is_x else layer.y_scale
+                )
+                for layer in on_axis
+            ]
+            given = [each for each in layer_scales if each is not None]
+            if any(each.spec() != given[0].spec() for each in given[1:]):
+                raise ValueError(
+                    f"Plots on axis {axis_id!r} give it different scales; set one with axis(scale=...)"
+                )
+            scale = given[0] if given else None
+        axes[axis_id] = _ResolvedAxis(side, title, scale)
+
+    tooltip = plot.tooltip if plot.tooltip is not None else True
+    legend_position = (
+        plot.legend_position if plot.legend_position is not None else "overlay"
+    )
     if legend_position not in _LEGEND_POSITIONS:
         raise ValueError(
             f"legend_position must be one of {list(_LEGEND_POSITIONS)}, got {legend_position!r}"
         )
+    return _ResolvedPlot(
+        layers=named,
+        axes=tuple(axes.items()),
+        title=plot.title,
+        tooltip=_parse_tooltip(tooltip),
+        legend_position=legend_position,
+    )
+
+
+class Plot(FunctionElement):
+    """
+    A 2D plot of one or more layers, as :func:`line`, :func:`scatter`,
+    :func:`area`, :func:`ohlc`, :func:`candlestick`, and :func:`layer` make.
+    Render it like any other element, or layer it with others.
+    """
+
+    def __init__(
+        self,
+        layers: Sequence[_Layer],
+        x_axes: Mapping[str, Axis] | None = None,
+        y_axes: Mapping[str, Axis] | None = None,
+        title: str | None = None,
+        tooltip: bool | Sequence[TooltipPart] | None = None,
+        legend_position: LegendPosition | None = None,
+        key: str | None = None,
+    ):
+        self.layers = tuple(layers)
+        self.x_axes = dict(x_axes or {})
+        self.y_axes = dict(y_axes or {})
+        self.title = title
+        self.tooltip = tooltip
+        self.legend_position = legend_position
+        if not self.layers:
+            raise ValueError("A plot needs at least one layer")
+        # Resolved now, so mistakes are reported where they were made
+        resolved = _resolve_plot(self)
+        super().__init__(
+            "deephaven_plugin_gigaplot.gigaplot.Plot",
+            # Each layer uses hooks, so a plot with another number of layers
+            # is rendered afresh
+            lambda: _layered(resolved, key=f"layers-{len(resolved.layers)}"),
+            key=key,
+        )
+
+
+def layer(
+    *plots: Plot,
+    x_axes: Mapping[str, Axis] | None = None,
+    y_axes: Mapping[str, Axis] | None = None,
+    title: str | None = None,
+    tooltip: bool | Sequence[TooltipPart] | None = None,
+    legend_position: LegendPosition | None = None,
+    key: str | None = None,
+) -> Plot:
+    """
+    Draw plots on top of each other, such as a line over a scatter, or series
+    in other units against an axis of their own.
+
+    Each plot draws against the axes its ``x_axis`` and ``y_axis`` name, and
+    plots naming the same axis share it. Zooming and panning move every axis
+    together. Each plot keeps its own table, and is downsampled on its own.
+
+    Examples:
+        Trades over quotes::
+
+            layer(
+                line(quotes, x="Timestamp", y="Mid"),
+                scatter(trades, x="Timestamp", y="Price"),
+            )
+
+        Volume against a second y axis on the right::
+
+            layer(
+                candlestick(bars, x="Timestamp", open="Open", high="High", low="Low", close="Close"),
+                area(bars, x="Timestamp", y="Volume", y_axis="right", y_title="Volume"),
+            )
+
+        Three axes, configured by name::
+
+            layer(
+                line(prices, x="Timestamp", y="Price"),
+                area(prices, x="Timestamp", y="Volume", y_axis="volume"),
+                line(rates, x="Timestamp", y="Rate", y_axis="rate"),
+                y_axes={
+                    "volume": axis(side="right", scale=log_scale()),
+                    "rate": axis(side="right", title="Rate %"),
+                },
+            )
+
+    Args:
+        *plots: The plots to draw, bottom first. A layered plot can be layered
+            again.
+        x_axes: Settings of x axes by name, from :func:`axis`. The first x axis
+            is named "x", and the one along the top "x2" when a plot passes
+            ``x_axis="top"``.
+        y_axes: Settings of y axes by name. The first y axis is named "y", and
+            the one on the right "y2" when a plot passes ``y_axis="right"``.
+        title: Title of the plot. Defaults to the first plot's title.
+        tooltip: What to draw while hovering, as each plot takes. Defaults to
+            the first plot's.
+        legend_position: Where to draw the legend. Defaults to the first
+            plot's.
+        key: The element's key.
+
+    Returns:
+        The layered plot.
+    """
+    if not plots:
+        raise ValueError("layer needs at least one plot")
+    for plot in plots:
+        if not isinstance(plot, Plot):
+            raise ValueError(
+                f"layer takes 2D plots, such as line() or a layer(), got {plot!r}"
+            )
+
+    def first(attribute: str, override: Any) -> Any:
+        if override is not None:
+            return override
+        return next(
+            (
+                getattr(plot, attribute)
+                for plot in plots
+                if getattr(plot, attribute) is not None
+            ),
+            None,
+        )
+
+    merged_x: dict[str, Axis] = {}
+    merged_y: dict[str, Axis] = {}
+    for plot in plots:
+        for axis_id, settings in plot.x_axes.items():
+            merged_x.setdefault(axis_id, settings)
+        for axis_id, settings in plot.y_axes.items():
+            merged_y.setdefault(axis_id, settings)
+    return Plot(
+        [each for plot in plots for each in plot.layers],
+        x_axes={**merged_x, **(x_axes or {})},
+        y_axes={**merged_y, **(y_axes or {})},
+        title=first("title", title),
+        tooltip=first("tooltip", tooltip),
+        legend_position=first("legend_position", legend_position),
+        key=key,
+    )
+
+
+def _use_layer(
+    layer: _Layer, x_axis: str, y_axis: str, scales: dict[str, Scale]
+) -> dict[str, Any]:
+    """
+    The props of one layer, with the table downsampled for the viewport its
+    axes show. Called once per layer, in order, so its hooks keep their place.
+    """
+    table, x, type, y, ohlc = (
+        layer.table,
+        layer.x,
+        layer.type,
+        layer.y,
+        layer.ohlc,
+    )
+    downsample, stacked, groupnorm = layer.downsample, layer.stacked, layer.groupnorm
+    x_scale, y_scale = scales.get("x_scale"), scales.get("y_scale")
     # Called on every render, like every hook, even though only bars need it
     table, ohlc = ui.use_memo(
         lambda: (table, ohlc) if ohlc is None else _unique_ohlc(table, x, ohlc),
@@ -436,32 +781,63 @@ def _plot(
     )
 
     opens, highs, lows, closes = ohlc if ohlc is not None else (None,) * 4
+    # Nested props are not renamed, so these keys are already as the client reads them
+    return {
+        "table": plot_table,
+        # Lets the client tell when the table matches the viewport it last asked for
+        "viewport": viewport if is_downsampled else None,
+        "bounds": plot_bounds,
+        "onViewportChange": on_viewport_change if is_downsampled else None,
+        "x": x,
+        "y": list(y) if y is not None else None,
+        "open": list(opens) if opens is not None else None,
+        "high": list(highs) if highs is not None else None,
+        "low": list(lows) if lows is not None else None,
+        "close": list(closes) if closes is not None else None,
+        "type": type,
+        "stacked": stacked,
+        "fill": list(layer.fill) if layer.fill is not None else None,
+        "xAxis": x_axis,
+        "yAxis": y_axis,
+        "xScale": x_scale.spec() if x_scale is not None else None,
+        "yScale": y_scale.spec() if y_scale is not None else None,
+    }
+
+
+@ui.component
+def _layered(plot: _ResolvedPlot) -> ui.BaseElement:
+    """The element every 2D plot renders: its layers, and the axes they are on."""
+    axes = dict(plot.axes)
+    layers = []
+    for each, x_axis, y_axis in plot.layers:
+        scales: dict[str, Scale] = {}
+        if axes[x_axis].scale is not None:
+            scales["x_scale"] = axes[x_axis].scale
+        if axes[y_axis].scale is not None:
+            scales["y_scale"] = axes[y_axis].scale
+        layers.append(_use_layer(each, x_axis, y_axis, scales))
     # The name must match the key in the mapping in GigaplotPlugin.ts
     return ui.BaseElement(
         "deephaven_plugin_gigaplot.gigaplot",
-        table=plot_table,
-        # Lets the client tell when the table matches the viewport it last asked for
-        viewport=viewport if is_downsampled else None,
-        bounds=plot_bounds,
-        on_viewport_change=on_viewport_change if is_downsampled else None,
-        x=x,
-        y=list(y) if y is not None else None,
-        open=list(opens) if opens is not None else None,
-        high=list(highs) if highs is not None else None,
-        low=list(lows) if lows is not None else None,
-        close=list(closes) if closes is not None else None,
-        type=type,
-        stacked=stacked,
-        fill=list(fill) if fill is not None else None,
-        title=title,
-        # The client defaults these to the column names when they are None
-        x_title=x_title,
-        y_title=y_title,
-        tooltip=tooltip_parts,
-        legend_position=legend_position,
-        x_scale=scales["x_scale"].spec() if "x_scale" in scales else None,
-        y_scale=scales["y_scale"].spec() if "y_scale" in scales else None,
+        title=plot.title,
+        tooltip=plot.tooltip,
+        legend_position=plot.legend_position,
+        # The client defaults titles that are None to the first layer's column
+        axes={
+            axis_id: {"side": resolved.side, "title": resolved.title}
+            for axis_id, resolved in plot.axes
+        },
+        layers=layers,
     )
+
+
+def _single(
+    layer: _Layer,
+    title: str | None,
+    tooltip: bool | Sequence[TooltipPart] | None,
+    legend_position: LegendPosition | None,
+) -> Plot:
+    return Plot([layer], title=title, tooltip=tooltip, legend_position=legend_position)
 
 
 def line(
@@ -472,11 +848,13 @@ def line(
     x_title: str | None = None,
     y_title: str | None = None,
     downsample: bool | Downsampler = True,
-    tooltip: bool | Sequence[TooltipPart] = True,
-    legend_position: LegendPosition = "overlay",
+    tooltip: bool | Sequence[TooltipPart] | None = None,
+    legend_position: LegendPosition | None = None,
     x_scale: ScaleLike = None,
     y_scale: ScaleLike = None,
-) -> ui.BaseElement:
+    x_axis: AxisRef | None = None,
+    y_axis: AxisRef | None = None,
+) -> Plot:
     """
     Plot columns of a table as lines. The table should be sorted by x. Hovering
     snaps to the x under the cursor, showing every line's value there.
@@ -504,7 +882,8 @@ def line(
             series' color.
         legend_position: Where to draw the legend. "overlay" lists the series
             across the top of the plot, over the data; "right" lists them in a
-            column beside the plot, which narrows to make room.
+            column beside the plot, which narrows to make room. Defaults to
+            "overlay".
         x_scale: How x values map to positions along the axis: a scale from
             :func:`calendar_scale` to remove the nights, weekends, and holidays
             between business sessions, or :func:`breaks_scale`,
@@ -513,24 +892,34 @@ def line(
             along the scale.
         y_scale: How y values map to positions: :func:`log_scale`,
             :func:`exp_scale`, :func:`pow_scale`, or "log". Defaults to linear.
-
+        x_axis: The x axis to draw against, for layering this plot with
+            others with :func:`layer`: "bottom", the default, "top" for a
+            second x axis along the top, a name of your own, or an
+            :func:`axis`.
+        y_axis: The y axis to draw against: "left", the default, "right" for
+            a second y axis on the right, a name of your own, or an
+            :func:`axis`.
     Returns:
-        The plot element.
+        The plot, to render, or to draw with others with :func:`layer`.
     """
-    return _plot(
-        table,
-        x,
-        "line",
-        tuple(_as_list(y)),
-        None,
+    return _single(
+        _Layer(
+            table,
+            x,
+            "line",
+            tuple(_as_list(y)),
+            None,
+            x_axis,
+            y_axis,
+            x_title,
+            y_title,
+            x_scale,
+            y_scale,
+            downsample,
+        ),
         title,
-        x_title,
-        y_title,
-        downsample,
         tooltip,
         legend_position,
-        x_scale=x_scale,
-        y_scale=y_scale,
     )
 
 
@@ -542,11 +931,13 @@ def scatter(
     x_title: str | None = None,
     y_title: str | None = None,
     downsample: bool | Downsampler = True,
-    tooltip: bool | Sequence[TooltipPart] = True,
-    legend_position: LegendPosition = "overlay",
+    tooltip: bool | Sequence[TooltipPart] | None = None,
+    legend_position: LegendPosition | None = None,
     x_scale: ScaleLike = None,
     y_scale: ScaleLike = None,
-) -> ui.BaseElement:
+    x_axis: AxisRef | None = None,
+    y_axis: AxisRef | None = None,
+) -> Plot:
     """
     Plot columns of a table as points. Hovering needs the cursor over a point.
 
@@ -573,7 +964,8 @@ def scatter(
             series' color.
         legend_position: Where to draw the legend. "overlay" lists the series
             across the top of the plot, over the data; "right" lists them in a
-            column beside the plot, which narrows to make room.
+            column beside the plot, which narrows to make room. Defaults to
+            "overlay".
         x_scale: How x values map to positions along the axis: a scale from
             :func:`calendar_scale` to remove the nights, weekends, and holidays
             between business sessions, or :func:`breaks_scale`,
@@ -582,24 +974,34 @@ def scatter(
             along the scale.
         y_scale: How y values map to positions: :func:`log_scale`,
             :func:`exp_scale`, :func:`pow_scale`, or "log". Defaults to linear.
-
+        x_axis: The x axis to draw against, for layering this plot with
+            others with :func:`layer`: "bottom", the default, "top" for a
+            second x axis along the top, a name of your own, or an
+            :func:`axis`.
+        y_axis: The y axis to draw against: "left", the default, "right" for
+            a second y axis on the right, a name of your own, or an
+            :func:`axis`.
     Returns:
-        The plot element.
+        The plot, to render, or to draw with others with :func:`layer`.
     """
-    return _plot(
-        table,
-        x,
-        "scatter",
-        tuple(_as_list(y)),
-        None,
+    return _single(
+        _Layer(
+            table,
+            x,
+            "scatter",
+            tuple(_as_list(y)),
+            None,
+            x_axis,
+            y_axis,
+            x_title,
+            y_title,
+            x_scale,
+            y_scale,
+            downsample,
+        ),
         title,
-        x_title,
-        y_title,
-        downsample,
         tooltip,
         legend_position,
-        x_scale=x_scale,
-        y_scale=y_scale,
     )
 
 
@@ -611,14 +1013,16 @@ def area(
     x_title: str | None = None,
     y_title: str | None = None,
     downsample: bool | Downsampler = True,
-    tooltip: bool | Sequence[TooltipPart] = True,
-    legend_position: LegendPosition = "overlay",
+    tooltip: bool | Sequence[TooltipPart] | None = None,
+    legend_position: LegendPosition | None = None,
     x_scale: ScaleLike = None,
     y_scale: ScaleLike = None,
     stacked: bool = True,
     groupnorm: GroupNorm | None = None,
     fill: Fill | Sequence[Fill | None] | None = None,
-) -> ui.BaseElement:
+    x_axis: AxisRef | None = None,
+    y_axis: AxisRef | None = None,
+) -> Plot:
     """
     Plot columns of a table as filled areas. Like ``deephaven.plot.express``,
     several y columns are stacked, each on top of the one before it, so the top
@@ -650,7 +1054,8 @@ def area(
             series' color.
         legend_position: Where to draw the legend. "overlay" lists the series
             across the top of the plot, over the data; "right" lists them in a
-            column beside the plot, which narrows to make room.
+            column beside the plot, which narrows to make room. Defaults to
+            "overlay".
         x_scale: How x values map to positions along the axis: a scale from
             :func:`calendar_scale` to remove the nights, weekends, and holidays
             between business sessions, or :func:`breaks_scale`,
@@ -668,9 +1073,15 @@ def area(
             :func:`linear_gradient`, for every area, or a sequence with one per
             y column, where None keeps the default. By default an area is its
             line color, half transparent.
-
+        x_axis: The x axis to draw against, for layering this plot with
+            others with :func:`layer`: "bottom", the default, "top" for a
+            second x axis along the top, a name of your own, or an
+            :func:`axis`.
+        y_axis: The y axis to draw against: "left", the default, "right" for
+            a second y axis on the right, a name of your own, or an
+            :func:`axis`.
     Returns:
-        The plot element.
+        The plot, to render, or to draw with others with :func:`layer`.
     """
     ys = tuple(_as_list(y))
     if groupnorm is not None and groupnorm not in _GROUPNORMS:
@@ -681,23 +1092,27 @@ def area(
         raise ValueError("groupnorm normalizes stacked areas, so it needs stacked=True")
     if stacked and len(set(ys)) != len(ys):
         raise ValueError("Each stacked y column must be different")
-    return _plot(
-        table,
-        x,
-        "area",
-        ys,
-        None,
+    return _single(
+        _Layer(
+            table,
+            x,
+            "area",
+            ys,
+            None,
+            x_axis,
+            y_axis,
+            x_title,
+            y_title,
+            x_scale,
+            y_scale,
+            downsample,
+            stacked=stacked,
+            groupnorm=groupnorm,
+            fill=_parse_fills(fill, len(ys)),
+        ),
         title,
-        x_title,
-        y_title,
-        downsample,
         tooltip,
         legend_position,
-        x_scale=x_scale,
-        y_scale=y_scale,
-        stacked=stacked,
-        groupnorm=groupnorm,
-        fill=_parse_fills(fill, len(ys)),
     )
 
 
@@ -713,26 +1128,32 @@ def _bars(
     x_title: str | None,
     y_title: str | None,
     downsample: bool | Downsampler,
-    tooltip: bool | Sequence[TooltipPart],
-    legend_position: LegendPosition,
+    tooltip: bool | Sequence[TooltipPart] | None,
+    legend_position: LegendPosition | None,
     x_scale: ScaleLike,
     y_scale: ScaleLike,
-) -> ui.BaseElement:
+    x_axis: AxisRef | None,
+    y_axis: AxisRef | None,
+) -> Plot:
     ohlc = tuple(tuple(columns) for columns in _ohlc_columns(open, high, low, close))
-    return _plot(
-        table,
-        x,
-        type,
-        None,
-        ohlc,
+    return _single(
+        _Layer(
+            table,
+            x,
+            type,
+            None,
+            ohlc,
+            x_axis,
+            y_axis,
+            x_title,
+            y_title,
+            x_scale,
+            y_scale,
+            downsample,
+        ),
         title,
-        x_title,
-        y_title,
-        downsample,
         tooltip,
         legend_position,
-        x_scale=x_scale,
-        y_scale=y_scale,
     )
 
 
@@ -747,11 +1168,13 @@ def ohlc(
     x_title: str | None = None,
     y_title: str | None = None,
     downsample: bool | Downsampler = True,
-    tooltip: bool | Sequence[TooltipPart] = True,
-    legend_position: LegendPosition = "overlay",
+    tooltip: bool | Sequence[TooltipPart] | None = None,
+    legend_position: LegendPosition | None = None,
     x_scale: ScaleLike = None,
     y_scale: ScaleLike = None,
-) -> ui.BaseElement:
+    x_axis: AxisRef | None = None,
+    y_axis: AxisRef | None = None,
+) -> Plot:
     """
     Plot open, high, low, and close values as OHLC bars: a line from low to
     high, with a tick to the left at the open and to the right at the close.
@@ -787,7 +1210,8 @@ def ohlc(
             series' color.
         legend_position: Where to draw the legend. "overlay" lists the series
             across the top of the plot, over the data; "right" lists them in a
-            column beside the plot, which narrows to make room.
+            column beside the plot, which narrows to make room. Defaults to
+            "overlay".
         x_scale: How x values map to positions along the axis: a scale from
             :func:`calendar_scale` to remove the nights, weekends, and holidays
             between business sessions, or :func:`breaks_scale`,
@@ -796,9 +1220,15 @@ def ohlc(
             along the scale.
         y_scale: How y values map to positions: :func:`log_scale`,
             :func:`exp_scale`, :func:`pow_scale`, or "log". Defaults to linear.
-
+        x_axis: The x axis to draw against, for layering this plot with
+            others with :func:`layer`: "bottom", the default, "top" for a
+            second x axis along the top, a name of your own, or an
+            :func:`axis`.
+        y_axis: The y axis to draw against: "left", the default, "right" for
+            a second y axis on the right, a name of your own, or an
+            :func:`axis`.
     Returns:
-        The plot element.
+        The plot, to render, or to draw with others with :func:`layer`.
     """
     return _bars(
         "ohlc",
@@ -816,6 +1246,8 @@ def ohlc(
         legend_position,
         x_scale,
         y_scale,
+        x_axis,
+        y_axis,
     )
 
 
@@ -830,11 +1262,13 @@ def candlestick(
     x_title: str | None = None,
     y_title: str | None = None,
     downsample: bool | Downsampler = True,
-    tooltip: bool | Sequence[TooltipPart] = True,
-    legend_position: LegendPosition = "overlay",
+    tooltip: bool | Sequence[TooltipPart] | None = None,
+    legend_position: LegendPosition | None = None,
     x_scale: ScaleLike = None,
     y_scale: ScaleLike = None,
-) -> ui.BaseElement:
+    x_axis: AxisRef | None = None,
+    y_axis: AxisRef | None = None,
+) -> Plot:
     """
     Plot open, high, low, and close values as candlesticks: a line from low to
     high, with a body from the open to the close. Bars that close below their
@@ -870,7 +1304,8 @@ def candlestick(
             series' color.
         legend_position: Where to draw the legend. "overlay" lists the series
             across the top of the plot, over the data; "right" lists them in a
-            column beside the plot, which narrows to make room.
+            column beside the plot, which narrows to make room. Defaults to
+            "overlay".
         x_scale: How x values map to positions along the axis: a scale from
             :func:`calendar_scale` to remove the nights, weekends, and holidays
             between business sessions, or :func:`breaks_scale`,
@@ -879,9 +1314,15 @@ def candlestick(
             along the scale.
         y_scale: How y values map to positions: :func:`log_scale`,
             :func:`exp_scale`, :func:`pow_scale`, or "log". Defaults to linear.
-
+        x_axis: The x axis to draw against, for layering this plot with
+            others with :func:`layer`: "bottom", the default, "top" for a
+            second x axis along the top, a name of your own, or an
+            :func:`axis`.
+        y_axis: The y axis to draw against: "left", the default, "right" for
+            a second y axis on the right, a name of your own, or an
+            :func:`axis`.
     Returns:
-        The plot element.
+        The plot, to render, or to draw with others with :func:`layer`.
     """
     return _bars(
         "candlestick",
@@ -899,6 +1340,8 @@ def candlestick(
         legend_position,
         x_scale,
         y_scale,
+        x_axis,
+        y_axis,
     )
 
 

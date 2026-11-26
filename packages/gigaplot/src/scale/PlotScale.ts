@@ -1,12 +1,16 @@
-import type {
-  AxisTick,
-  AxisTickGenerator,
-  AxisValueFormatter,
-  Bounds,
-  PlotFill,
-  PlotShape,
-  SeriesData,
-  SeriesDescriptor,
+import {
+  PRIMARY_X_AXIS,
+  PRIMARY_Y_AXIS,
+  type AxisTick,
+  type AxisTickGenerator,
+  type AxisValueFormatter,
+  type Bounds,
+  type PlotAxis,
+  type PlotFill,
+  type PlotRange,
+  type PlotShape,
+  type SeriesData,
+  type SeriesDescriptor,
 } from '../model/PlotTypes';
 import { formatValue, linearTicks } from './ticks';
 
@@ -62,6 +66,27 @@ export function isLinearScale(scale: PlotScale | undefined): boolean {
 export interface PlotScales {
   x: PlotScale;
   y: PlotScale;
+  /** Scales of the shape's other axes, by id. Linear for those missing. */
+  axes?: ReadonlyMap<string, PlotScale>;
+}
+
+/**
+ * The scales a series is drawn on: those of the axes it names, or of the
+ * primary axes for any it does not.
+ */
+export function getSeriesScales(
+  { xAxis, yAxis }: Pick<SeriesDescriptor, 'xAxis' | 'yAxis'>,
+  scales: PlotScales
+): PlotScales {
+  const x =
+    xAxis == null || xAxis === PRIMARY_X_AXIS
+      ? scales.x
+      : (scales.axes?.get(xAxis) ?? linearScale);
+  const y =
+    yAxis == null || yAxis === PRIMARY_Y_AXIS
+      ? scales.y
+      : (scales.axes?.get(yAxis) ?? linearScale);
+  return x === scales.x && y === scales.y ? scales : { x, y };
 }
 
 /**
@@ -181,6 +206,21 @@ export function toPlotBounds(
     : undefined;
 }
 
+/** A range in data units to plot units. Undefined if an end has no position. */
+export function toPlotRange(
+  range: PlotRange | undefined,
+  scale: PlotScale
+): PlotRange | undefined {
+  if (range == null) {
+    return undefined;
+  }
+  const min = scale.toPlot(range.min);
+  const max = scale.toPlot(range.max);
+  return Number.isFinite(min) && Number.isFinite(max)
+    ? { min, max }
+    : undefined;
+}
+
 /**
  * Bounds in plot units to data units. An edge past the end of a scale's
  * domain, such as below zero on an exponential axis, is pulled in to the
@@ -275,6 +315,19 @@ function toPlotFill(fill: PlotFill | undefined, scales: PlotScales) {
   };
 }
 
+/** An axis in plot units, the way {@link toPlotShape} places the primary axes. */
+function toPlotAxis(axis: PlotAxis, scale: PlotScale): PlotAxis {
+  if (isLinearScale(scale)) {
+    return axis;
+  }
+  return {
+    ...axis,
+    range: toPlotRange(axis.range, scale),
+    ticks: toPlotTicks(scale, axis.ticks),
+    formatter: toPlotFormatter(scale, axis.formatter),
+  };
+}
+
 /**
  * The shape as a plot in plot units sees it: bounds placed by the scales,
  * ticks and formatters that read and label data values, and gradients in data
@@ -282,28 +335,47 @@ function toPlotFill(fill: PlotFill | undefined, scales: PlotScales) {
  * work from this, so none of them needs to know about scales.
  */
 export function toPlotShape(shape: PlotShape, scales: PlotScales): PlotShape {
-  if (isLinearScale(scales.x) && isLinearScale(scales.y)) {
+  const isPrimaryLinear = isLinearScale(scales.x) && isLinearScale(scales.y);
+  const axisScales = scales.axes;
+  const isAxesLinear =
+    axisScales == null ||
+    Array.from(axisScales.values()).every(scale => isLinearScale(scale));
+  if (isPrimaryLinear && isAxesLinear) {
     return shape;
   }
-  const series = shape.series.map((descriptor): SeriesDescriptor => ({
-    ...descriptor,
-    bounds: toPlotBounds(descriptor.bounds, scales),
-    ...(descriptor.style?.fill != null
-      ? {
-          style: {
-            ...descriptor.style,
-            fill: toPlotFill(descriptor.style.fill, scales),
-          },
-        }
-      : {}),
-  }));
+  const series = shape.series.map((descriptor): SeriesDescriptor => {
+    const seriesScales = getSeriesScales(descriptor, scales);
+    return {
+      ...descriptor,
+      bounds: toPlotBounds(descriptor.bounds, seriesScales),
+      ...(descriptor.style?.fill != null
+        ? {
+            style: {
+              ...descriptor.style,
+              fill: toPlotFill(descriptor.style.fill, seriesScales),
+            },
+          }
+        : {}),
+    };
+  });
   return {
     ...shape,
     series,
-    bounds: toPlotBounds(shape.bounds, scales),
-    xAxisTicks: toPlotTicks(scales.x, shape.xAxisTicks),
-    yAxisTicks: toPlotTicks(scales.y, shape.yAxisTicks),
-    xAxisFormatter: toPlotFormatter(scales.x, shape.xAxisFormatter),
-    yAxisFormatter: toPlotFormatter(scales.y, shape.yAxisFormatter),
+    ...(shape.axes != null
+      ? {
+          axes: shape.axes.map(axis =>
+            toPlotAxis(axis, axisScales?.get(axis.id) ?? linearScale)
+          ),
+        }
+      : {}),
+    ...(isPrimaryLinear
+      ? {}
+      : {
+          bounds: toPlotBounds(shape.bounds, scales),
+          xAxisTicks: toPlotTicks(scales.x, shape.xAxisTicks),
+          yAxisTicks: toPlotTicks(scales.y, shape.yAxisTicks),
+          xAxisFormatter: toPlotFormatter(scales.x, shape.xAxisFormatter),
+          yAxisFormatter: toPlotFormatter(scales.y, shape.yAxisFormatter),
+        }),
   };
 }

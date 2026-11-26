@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSelector } from "react-redux";
 import { useApi } from "@deephaven/jsapi-bootstrap";
 import type { dh as DhType } from "@deephaven/jsapi-types";
-import Log from "@deephaven/log";
 import { getSettings, type RootState } from "@deephaven/redux";
 import {
   is3DSeriesType,
@@ -16,6 +15,9 @@ import {
   type PlotSeriesType,
 } from "gigaplot";
 import DownsamplingIndicator from "./DownsamplingIndicator";
+import LayeredGigaplotView, {
+  type LayeredGigaplotViewProps,
+} from "./LayeredGigaplotView";
 import TableDataSource, {
   type InstantFormatterFactory,
   type TableDataSourceOptions,
@@ -23,8 +25,7 @@ import TableDataSource, {
 import type { DownsampleParams } from "./downsampleParams";
 import { createInstantFormatter } from "./instantFormatter";
 import { getTooltipOptions, type TooltipProp } from "./tooltipOptions";
-
-const log = Log.module("deephaven-plugin-gigaplot.GigaplotView");
+import { useFetchedTable } from "./useFetchedTable";
 
 const CONTAINER_STYLE = {
   position: "relative",
@@ -32,7 +33,8 @@ const CONTAINER_STYLE = {
   height: "100%",
 } as const;
 
-export interface GigaplotViewProps {
+/** A plot of one table, as 3D plots are sent. */
+export interface TableGigaplotViewProps {
   /** The table to plot. Absent until the first downsample request is served. */
   table?: DhType.WidgetExportedObject;
   /** The params `table` was downsampled for, present when downsampling. */
@@ -92,48 +94,7 @@ export interface GigaplotViewProps {
   legendPosition?: PlotLegendPosition;
 }
 
-/**
- * Fetches each exported table and hands it to `onTable`, which takes
- * ownership. A fetch that is superseded before it resolves is closed instead.
- */
-function useFetchedTable(
-  exported: DhType.WidgetExportedObject | undefined,
-  onTable: ((table: DhType.Table) => void) | undefined,
-  onError: (error: unknown) => void,
-): void {
-  useEffect(
-    function fetchTable() {
-      if (exported == null || onTable == null) {
-        return undefined;
-      }
-      let isCancelled = false;
-      // Re-export so the table outlives the document update that sent it
-      exported
-        .reexport()
-        .then((reexported) => reexported.fetch())
-        .then((result) => {
-          const table = result as DhType.Table;
-          if (isCancelled) {
-            table.close();
-            return;
-          }
-          onTable(table);
-        })
-        .catch((e) => {
-          if (!isCancelled) {
-            log.error("Unable to fetch table", e);
-            onError(e);
-          }
-        });
-      return () => {
-        isCancelled = true;
-      };
-    },
-    [exported, onTable, onError],
-  );
-}
-
-export function GigaplotView({
+function TableGigaplotView({
   table: exportedTable,
   viewport,
   bounds: exportedBounds,
@@ -165,7 +126,7 @@ export function GigaplotView({
   yScale,
   tooltip,
   legendPosition,
-}: GigaplotViewProps): JSX.Element {
+}: TableGigaplotViewProps): JSX.Element {
   const dh = useApi();
   const [error, setError] = useState<unknown>(null);
   const [isDownsampling, setIsDownsampling] = useState(false);
@@ -305,6 +266,22 @@ export function GigaplotView({
       {error == null && isDownsampling && <DownsamplingIndicator />}
     </div>
   );
+}
+
+/**
+ * A 2D plot of layers, each from a table of its own, or a plot of one table,
+ * which is how 3D plots are sent.
+ */
+export type GigaplotViewProps =
+  (TableGigaplotViewProps & { layers?: undefined }) | LayeredGigaplotViewProps;
+
+export function GigaplotView(props: GigaplotViewProps): JSX.Element {
+  if (props.layers != null) {
+    // eslint-disable-next-line react/jsx-props-no-spreading
+    return <LayeredGigaplotView {...props} />;
+  }
+  // eslint-disable-next-line react/jsx-props-no-spreading
+  return <TableGigaplotView {...props} />;
 }
 
 export default GigaplotView;

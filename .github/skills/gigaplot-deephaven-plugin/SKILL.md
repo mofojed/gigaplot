@@ -12,7 +12,7 @@ the downsampling protocol, and custom downsamplers. Read it first.
 ## How a plot gets its data
 
 ```
-Python _plot (ui.component)               JS GigaplotView -> TableDataSource -> PlotView
+Python _use_layer (per layer)             JS LayeredGigaplotView -> TableDataSource -> PlotView
   bounds(table)        ──bounds──────────▶  setBoundsTable   ─ shapechanged (bounds) ─▶ home viewport
                        ◀─on_viewport_change─ requestSeriesData -> getDownsampleParams
   set_viewport -> downsample(table, viewport)
@@ -35,6 +35,12 @@ Python _plot (ui.component)               JS GigaplotView -> TableDataSource -> 
    the "Downsampling…" indicator until the drawn table matches the latest
    request.
 
+Every 2D plot is sent as layers, even a single `line()`, and each layer runs
+this protocol on its own: its own bounds, viewport state, and downsampled
+table. `LayeredGigaplotView` makes a `TableDataSource` per layer and combines
+them in gigaplot's `LayeredDataSource`, which asks each for its series in the
+viewport of the axes the layer is drawn on.
+
 Ordering is not guaranteed. The bounds can arrive before, during, or after
 `PlotView.initialize()`, and the WebGPU renderer takes much longer to start on
 a cold page. Any fix in this area must hold for every order.
@@ -55,8 +61,15 @@ a cold page. Any fix in this area must hold for every order.
 - Instant columns are plotted as nanoseconds since a per axis origin. The
   server subtracts the origin as a `long` before converting to `double`. Keep
   that order, or values lose nanosecond precision.
-- `line`, `scatter`, `area`, `ohlc`, and `candlestick` in `gigaplot.py` all render
-  the `_plot` component. Bar plots send `open`, `high`, `low`, and `close`
+- `line`, `scatter`, `area`, `ohlc`, and `candlestick` in `gigaplot.py` return a
+  `Plot` of one `_Layer`, and `layer` merges `Plot`s into one. `Plot` is a
+  `FunctionElement` that resolves its axes when it is made, in
+  `_resolve_plot`, so mistakes raise at the call, and renders `_layered`,
+  which sends `layers` and `axes`. `_layered` calls `_use_layer` once per
+  layer, in order, so each layer's hooks keep their place; it is keyed by the
+  layer count, so a plot with another number of layers renders afresh. Props
+  nested in `layers` and `axes` are not renamed to camelCase by `deephaven.ui`,
+  so `_use_layer` writes their keys as the client reads them. Bar plots send `open`, `high`, `low`, and `close`
   column lists instead of `y`, and a downsampler receives their columns
   flattened as `[open0, high0, low0, close0, open1, ...]`. Bounds for bars come
   from `ohlc_bounds`, as the lowest low and highest high per series, in the
@@ -80,9 +93,15 @@ a cold page. Any fix in this area must hold for every order.
   then keeps the same rows per bin, so each area's base, which
   `TableDataSource` takes from the previous series' column, is exactly the top
   of the one below. Area bounds come from `area_bounds`, which includes zero.
-- `GigaplotView` memoizes the source on `x`, the column lists (by JSON), `type`, `stacked`,
-  `fill`, `color` and `size`, and the 3D ranges (each by JSON), `title`, `xTitle`, `yTitle`, `zTitle`, and whether downsampling is on. Changing any of these recreates the source
+- `LayeredGigaplotView` memoizes every layer's source, and the
+  `LayeredDataSource`, on one JSON key of the layers without their tables,
+  viewports, and callbacks, the `axes`, and the `title`. For 3D plots,
+  `GigaplotView` memoizes the source on `x`, the column lists (by JSON), `type`, `stacked`,
+  `fill`, `color` and `size`, and the 3D ranges (each by JSON), `title`, `xTitle`, `yTitle`, `zTitle`, and whether downsampling is on. Changing any of these recreates the sources
   and the `PlotView`, so do not add inputs that change every render.
+- Layers on the same axis share one `InstantAxis`, keyed by dimension and axis
+  id, so their Instants count from the same origin and line up. A source with
+  an origin of its own would place its data hours or days off.
 - Bounds use Deephaven's `agg.min_` and `agg.max_`, which return NaN if any
   value in the column is NaN, and the client then drops that series' extent.
   Tables and examples should use `NULL_DOUBLE`, not NaN, for missing values.

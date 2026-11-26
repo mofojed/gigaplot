@@ -53,6 +53,14 @@ See `AGENTS.md` for setup, validation, and formatting.
    `request.xScale.toPlot(x)` when it is set, or business time axes come out
    coarse. See `packages/gigaplot/docs/scales.md`.
 
+9. **A series on another axis has a viewport of its own.** Shapes can add
+   axes in `axes`, which series name in `xAxis` and `yAxis`. `PlotView` links
+   each such axis to the primary viewport, and passes renderers, hover, and
+   requests each series' own viewport. A renderer must draw a series against
+   `seriesViewports.get(id) ?? viewport` from `setViewport`, never the plot's
+   viewport alone, and anything that maps a series to screen must look its
+   viewport up the same way. See "Axes" in `packages/gigaplot/docs/architecture.md`.
+
 ## Iterating
 
 The demo app is the fastest loop and needs no Deephaven server:

@@ -1,7 +1,7 @@
 import type { dh as DhType } from "@deephaven/jsapi-types";
 import type { SeriesDataRequest } from "gigaplot";
 import TableDataSource from "./TableDataSource";
-import { INSTANT_TYPE } from "./instants";
+import { INSTANT_TYPE, InstantAxis } from "./instants";
 
 const EVENT_UPDATED = "updated";
 const dh = { Table: { EVENT_UPDATED } } as unknown as typeof DhType;
@@ -359,6 +359,35 @@ describe("TableDataSource", () => {
         xAxisTicks!(bounds!.xMin - 1e9, bounds!.xMax + 1e9, 2)[0].label,
       ).toBe("custom");
       source.close();
+    });
+
+    it("counts from the origin of an axis shared with another source", async () => {
+      const xInstants = new InstantAxis();
+      const first = new TableDataSource(dh, {
+        x: "X",
+        y: ["Y"],
+        type: "line",
+        xInstants,
+      });
+      const second = new TableDataSource(dh, {
+        x: "X",
+        y: ["Y"],
+        type: "line",
+        xInstants,
+      });
+      const firstTable = makeTable(INSTANT_X);
+      const secondTable = makeTable(INSTANT_X);
+      first.setTable(firstTable.table);
+      second.setTable(secondTable.table);
+      firstTable.emit([{ X: instant("1704067200000000000"), Y: 1 }]);
+      // A day later, which alone would pick an origin of its own
+      secondTable.emit([{ X: instant("1704153600000000000"), Y: 2 }]);
+
+      const { data: firstData } = await first.requestSeriesData(request(1));
+      const { data: secondData } = await second.requestSeriesData(request(1));
+      expect(secondData.x[0] - firstData.x[0]).toBe(86_400e9);
+      first.close();
+      second.close();
     });
 
     it("sends the origin with downsample requests", async () => {

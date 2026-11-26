@@ -1,8 +1,16 @@
-import type { AxisValueFormatter, Bounds, PlotShape } from '../model/PlotTypes';
+import {
+  PRIMARY_X_AXIS,
+  PRIMARY_Y_AXIS,
+  type AxisValueFormatter,
+  type Bounds,
+  type PlotAxisSide,
+  type PlotShape,
+} from '../model/PlotTypes';
 import { formatValue } from '../scale/ticks';
 import { parseColor } from '../theme/parseColor';
 import type { PlotTheme } from '../theme/PlotTheme';
 import type { PlotArea } from './AxisPainter';
+import { getAxisSide, type PlacedAxis } from './plotAxes';
 import {
   isSnappingSeriesType,
   type PlotHover,
@@ -22,6 +30,17 @@ export interface HoverPaintInput {
   height: number;
   area: PlotArea;
   viewport: Bounds;
+  /**
+   * The viewports of series drawn against axes besides the primary ones, by
+   * id. Other series use `viewport`.
+   */
+  seriesViewports?: ReadonlyMap<string, Bounds>;
+  /**
+   * The axes as laid out, for labelling hovered values on the axis each
+   * series is drawn against. Defaults to the primary axes along the bottom
+   * and left edges.
+   */
+  axes?: readonly PlacedAxis[];
   shape: PlotShape;
   theme: PlotTheme;
   hover: PlotHover | undefined;
@@ -33,6 +52,24 @@ interface TooltipRow {
   color?: string;
   name: string;
   value: string;
+}
+
+/** Where a hovered point is drawn, and the axes it is measured on. */
+interface VisiblePoint {
+  point: PlotHoverPoint;
+  x: number;
+  y: number;
+  xAxis: AxisInfo;
+  yAxis: AxisInfo;
+}
+
+/** What hover needs of an axis to label a value on it. */
+interface AxisInfo {
+  id: string;
+  side: PlotAxisSide;
+  offset: number;
+  label?: string;
+  formatter?: AxisValueFormatter;
 }
 
 interface Box {
@@ -140,17 +177,18 @@ export class HoverPainter {
     const { width, height, area, viewport, hover, options } = input;
     context.clearRect(0, 0, width, height);
     const xSpan = viewport.xMax - viewport.xMin;
-    const ySpan = viewport.yMax - viewport.yMin;
     if (hover == null || hover.points.length === 0 || !(xSpan > 0)) {
       return;
     }
-    const toX = (value: number): number =>
-      area.left + ((value - viewport.xMin) / xSpan) * area.width;
-    const toY = (value: number): number =>
-      area.top + area.height - ((value - viewport.yMin) / ySpan) * area.height;
     // Lines snap to their nearest point, which may sit just outside the view
     const visible = hover.points
-      .map(point => ({ point, x: toX(point.x), y: toY(point.y) }))
+      .map((point): VisiblePoint => ({
+        point,
+        x: HoverPainter.toScreenX(input, point, point.x),
+        y: HoverPainter.toScreenY(input, point, point.y),
+        xAxis: HoverPainter.getAxis(input, point.xAxis ?? PRIMARY_X_AXIS, 'x'),
+        yAxis: HoverPainter.getAxis(input, point.yAxis ?? PRIMARY_Y_AXIS, 'y'),
+      }))
       .filter(
         ({ x, y }) =>
           x >= area.left &&
@@ -172,25 +210,113 @@ export class HoverPainter {
       this.paintYAxisLabels(input, visible);
     }
     if (options.box) {
-      this.paintBox(input, toX(hover.x), toY(hover.y));
+      this.paintBox(
+        input,
+        HoverPainter.toScreenX(input, {}, hover.x),
+        HoverPainter.toScreenY(input, {}, hover.y)
+      );
     }
   }
 
-  private formatX(input: HoverPaintInput, value: number): string {
-    const { shape, viewport, area } = input;
-    return HoverPainter.format(
-      shape.xAxisFormatter,
-      value,
-      (viewport.xMax - viewport.xMin) / area.width
+  /** The viewport a point is drawn in: its series', or the plot's. */
+  private static getViewport(
+    { viewport, seriesViewports }: HoverPaintInput,
+    point: { seriesId?: string }
+  ): Bounds {
+    return (
+      (point.seriesId != null
+        ? seriesViewports?.get(point.seriesId)
+        : undefined) ?? viewport
     );
   }
 
-  private formatY(input: HoverPaintInput, value: number): string {
-    const { shape, viewport, area } = input;
+  private static toScreenX(
+    input: HoverPaintInput,
+    point: { seriesId?: string },
+    value: number
+  ): number {
+    const { area } = input;
+    const { xMin, xMax } = HoverPainter.getViewport(input, point);
+    return area.left + ((value - xMin) / (xMax - xMin)) * area.width;
+  }
+
+  private static toScreenY(
+    input: HoverPaintInput,
+    point: { seriesId?: string },
+    value: number
+  ): number {
+    const { area } = input;
+    const { yMin, yMax } = HoverPainter.getViewport(input, point);
+    return (
+      area.top + area.height - ((value - yMin) / (yMax - yMin)) * area.height
+    );
+  }
+
+  /** The axis with an id, from the layout, or else the primary axes' defaults. */
+  private static getAxis(
+    input: HoverPaintInput,
+    id: string,
+    dimension: 'x' | 'y'
+  ): AxisInfo {
+    const placed = input.axes?.find(axis => axis.id === id);
+    if (placed != null) {
+      return placed;
+    }
+    const { shape } = input;
+    const axis = shape.axes?.find(
+      other => other.id === id && other.dimension === dimension
+    );
+    if (axis != null) {
+      return {
+        id,
+        side: getAxisSide(axis),
+        offset: 0,
+        label: axis.label,
+        formatter: axis.formatter,
+      };
+    }
+    return dimension === 'y'
+      ? {
+          id,
+          side: shape.yAxisSide === 'right' ? 'right' : 'left',
+          offset: 0,
+          label: shape.yAxisLabel,
+          formatter: shape.yAxisFormatter,
+        }
+      : {
+          id: PRIMARY_X_AXIS,
+          side: shape.xAxisSide === 'top' ? 'top' : 'bottom',
+          offset: 0,
+          label: shape.xAxisLabel,
+          formatter: shape.xAxisFormatter,
+        };
+  }
+
+  private formatX(
+    input: HoverPaintInput,
+    point: PlotHoverPoint,
+    value: number
+  ): string {
+    const { area } = input;
+    const { xMin, xMax } = HoverPainter.getViewport(input, point);
     return HoverPainter.format(
-      shape.yAxisFormatter,
+      HoverPainter.getAxis(input, point.xAxis ?? PRIMARY_X_AXIS, 'x').formatter,
       value,
-      (viewport.yMax - viewport.yMin) / area.height
+      (xMax - xMin) / area.width
+    );
+  }
+
+  private formatY(
+    input: HoverPaintInput,
+    point: PlotHoverPoint,
+    value: number
+  ): string {
+    const { area } = input;
+    const { yMin, yMax } = HoverPainter.getViewport(input, point);
+    return HoverPainter.format(
+      HoverPainter.getAxis(input, point.yAxis ?? PRIMARY_Y_AXIS, 'y').formatter,
+      value,
+      (yMax - yMin) / area.height
     );
   }
 
@@ -208,7 +334,7 @@ export class HoverPainter {
    */
   private paintGuides(
     { area, theme }: HoverPaintInput,
-    visible: { point: { color: string }; x: number; y: number }[]
+    visible: VisiblePoint[]
   ): void {
     const context = this.context as CanvasRenderingContext2D;
     context.save();
@@ -218,15 +344,16 @@ export class HoverPainter {
     context.lineWidth = theme.hoverGuideWidth;
     context.setLineDash(theme.hoverGuideDash);
     const bottom = area.top + area.height;
+    const right = area.left + area.width;
     for (let i = 0; i < visible.length; i += 1) {
-      const { point, x, y } = visible[i];
+      const { point, x, y, xAxis, yAxis } = visible[i];
       const crispX = Math.round(x) + 0.5;
       const crispY = Math.round(y) + 0.5;
       context.strokeStyle = point.color;
       context.beginPath();
-      context.moveTo(crispX, bottom);
+      context.moveTo(crispX, xAxis.side === 'top' ? area.top : bottom);
       context.lineTo(crispX, crispY);
-      context.moveTo(area.left, crispY);
+      context.moveTo(yAxis.side === 'right' ? right : area.left, crispY);
       context.lineTo(crispX, crispY);
       context.stroke();
     }
@@ -235,7 +362,7 @@ export class HoverPainter {
 
   private paintMarkers(
     { theme }: HoverPaintInput,
-    visible: { point: { color: string }; x: number; y: number }[]
+    visible: VisiblePoint[]
   ): void {
     const context = this.context as CanvasRenderingContext2D;
     context.lineWidth = theme.hoverGuideWidth;
@@ -278,92 +405,118 @@ export class HoverPainter {
   }
 
   /**
-   * One label per distinct x on the x axis, centered under it, and nudged
-   * apart only where they would overlap, such as a scatter point beside the
-   * x the lines snapped to. Points within a pixel of each other share a
-   * label; see {@link isSameColumn}.
+   * One label per distinct x on each x axis, centered under it, or over it
+   * on an axis along the top, and nudged apart only where they would
+   * overlap, such as a scatter point beside the x the lines snapped to.
+   * Points within a pixel of each other share a label; see
+   * {@link isSameColumn}.
    */
   private paintXAxisLabels(
     input: HoverPaintInput,
-    visible: { point: { x: number }; x: number }[]
+    visible: VisiblePoint[]
   ): void {
     const context = this.context as CanvasRenderingContext2D;
     const { width, area, theme } = input;
     context.font = `${theme.fontSize}px ${theme.fontFamily}`;
     const labelHeight = theme.fontSize + theme.tooltipPadding;
-    const labels: { text: string; x: number; width: number }[] = [];
-    for (let i = 0; i < visible.length; i += 1) {
-      const { x } = visible[i];
-      if (!labels.some(label => isSameColumn(label.x, x))) {
-        const text = this.formatX(input, visible[i].point.x);
-        labels.push({
-          text,
-          x: visible[i].x,
-          width: context.measureText(text).width + theme.tooltipPadding * 2,
-        });
+    const byAxis = new Map<string, VisiblePoint[]>();
+    visible.forEach(entry => {
+      byAxis.set(entry.xAxis.id, [
+        ...(byAxis.get(entry.xAxis.id) ?? []),
+        entry,
+      ]);
+    });
+    byAxis.forEach(entries => {
+      const { side, offset } = entries[0].xAxis;
+      const labels: { text: string; x: number; width: number }[] = [];
+      for (let i = 0; i < entries.length; i += 1) {
+        const { x, point } = entries[i];
+        if (!labels.some(label => isSameColumn(label.x, x))) {
+          const text = this.formatX(input, point, point.x);
+          labels.push({
+            text,
+            x,
+            width: context.measureText(text).width + theme.tooltipPadding * 2,
+          });
+        }
       }
-    }
-    // Spread by the widest, which keeps the narrower ones clear as well
-    const labelWidth = Math.max(0, ...labels.map(label => label.width));
-    const centers = spreadLabels(
-      labels.map(label => label.x),
-      labelWidth + LABEL_GAP,
-      labelWidth / 2,
-      width - labelWidth / 2
-    );
-    for (let i = 0; i < labels.length; i += 1) {
-      this.paintLabel(
-        {
-          left: centers[i] - labels[i].width / 2,
-          top: area.top + area.height,
-          width: labels[i].width,
-          height: labelHeight,
-        },
-        labels[i].text,
-        theme.tooltipBackgroundColor,
-        theme.tooltipBorderColor,
-        theme.tooltipTextColor
+      // Spread by the widest, which keeps the narrower ones clear as well
+      const labelWidth = Math.max(0, ...labels.map(label => label.width));
+      const centers = spreadLabels(
+        labels.map(label => label.x),
+        labelWidth + LABEL_GAP,
+        labelWidth / 2,
+        width - labelWidth / 2
       );
-    }
+      const top =
+        side === 'top'
+          ? area.top - offset - labelHeight
+          : area.top + area.height + offset;
+      for (let i = 0; i < labels.length; i += 1) {
+        this.paintLabel(
+          {
+            left: centers[i] - labels[i].width / 2,
+            top,
+            width: labels[i].width,
+            height: labelHeight,
+          },
+          labels[i].text,
+          theme.tooltipBackgroundColor,
+          theme.tooltipBorderColor,
+          theme.tooltipTextColor
+        );
+      }
+    });
   }
 
   /**
-   * One label per point against the y axis, level with its value and filled
-   * with its series color, nudged apart only where they would overlap.
+   * One label per point against the y axis it is drawn on, level with its
+   * value and filled with its series color, nudged apart only where labels
+   * on the same edge would overlap.
    */
   private paintYAxisLabels(
     input: HoverPaintInput,
-    visible: { point: { y: number; color: string }; y: number }[]
+    visible: VisiblePoint[]
   ): void {
     const context = this.context as CanvasRenderingContext2D;
-    const { height, area, theme } = input;
+    const { width, height, area, theme } = input;
     context.font = `${theme.fontSize}px ${theme.fontFamily}`;
     const labelHeight = theme.fontSize + theme.tooltipPadding;
-    const centers = spreadLabels(
-      visible.map(({ y }) => y),
-      labelHeight + LABEL_GAP,
-      labelHeight / 2,
-      height - labelHeight / 2
-    );
     const textColors = [theme.backgroundColor, theme.tooltipTextColor];
-    for (let i = 0; i < visible.length; i += 1) {
-      const { point } = visible[i];
-      const text = this.formatY(input, point.y);
-      const labelWidth =
-        context.measureText(text).width + theme.tooltipPadding * 2;
-      this.paintLabel(
-        {
-          left: Math.max(0, area.left - labelWidth),
-          top: centers[i] - labelHeight / 2,
-          width: labelWidth,
-          height: labelHeight,
-        },
-        text,
-        point.color,
-        undefined,
-        pickContrastingColor(point.color, textColors)
+    (['left', 'right'] as const).forEach(side => {
+      const entries = visible.filter(entry => entry.yAxis.side === side);
+      const centers = spreadLabels(
+        entries.map(({ y }) => y),
+        labelHeight + LABEL_GAP,
+        labelHeight / 2,
+        height - labelHeight / 2
       );
-    }
+      for (let i = 0; i < entries.length; i += 1) {
+        const { point, yAxis } = entries[i];
+        const text = this.formatY(input, point, point.y);
+        const labelWidth =
+          context.measureText(text).width + theme.tooltipPadding * 2;
+        const left =
+          side === 'right'
+            ? Math.min(
+                width - labelWidth,
+                area.left + area.width + yAxis.offset
+              )
+            : Math.max(0, area.left - yAxis.offset - labelWidth);
+        this.paintLabel(
+          {
+            left,
+            top: centers[i] - labelHeight / 2,
+            width: labelWidth,
+            height: labelHeight,
+          },
+          text,
+          point.color,
+          undefined,
+          pickContrastingColor(point.color, textColors)
+        );
+      }
+    });
   }
 
   /**
@@ -377,7 +530,7 @@ export class HoverPainter {
     cursorY: number
   ): void {
     const context = this.context as CanvasRenderingContext2D;
-    const { width, height, shape, theme, hover } = input;
+    const { width, height, theme, hover } = input;
     const points = (hover as PlotHover).points;
     const font = `${theme.fontSize}px ${theme.fontFamily}`;
     const headerFont = `bold ${font}`;
@@ -385,25 +538,42 @@ export class HoverPainter {
     const lineHeight = Math.round(theme.fontSize * TOOLTIP_LINE_HEIGHT);
     const swatchSize = theme.legendSwatchSize;
 
-    const { viewport, area } = input;
-    const toX = (value: number): number =>
-      ((value - viewport.xMin) / (viewport.xMax - viewport.xMin)) * area.width;
+    const toX = (point: PlotHoverPoint): number =>
+      HoverPainter.toScreenX(input, point, point.x);
+    const getXAxisId = (point: PlotHoverPoint): string =>
+      point.xAxis ?? PRIMARY_X_AXIS;
+    // Lines snapped along the primary x head the box, if any are hovered
+    const isPrimaryX = (point: PlotHoverPoint): boolean =>
+      getXAxisId(point) === PRIMARY_X_AXIS;
     const headerPoint =
-      points.find(point => isSnappingSeriesType(point.type)) ?? points[0];
-    const headerX = this.formatX(input, headerPoint.x);
+      points.find(
+        point => isSnappingSeriesType(point.type) && isPrimaryX(point)
+      ) ??
+      points.find(point => isSnappingSeriesType(point.type)) ??
+      points[0];
+    const headerX = this.formatX(input, headerPoint, headerPoint.x);
+    const headerLabel = HoverPainter.getAxis(
+      input,
+      getXAxisId(headerPoint),
+      'x'
+    ).label;
     const header =
-      shape.xAxisLabel != null && shape.xAxisLabel !== ''
-        ? `${shape.xAxisLabel}: ${headerX}`
+      headerLabel != null && headerLabel !== ''
+        ? `${headerLabel}: ${headerX}`
         : headerX;
     const rows: TooltipRow[] = [];
     const addRows = (point: PlotHoverPoint): void => {
-      const isHeaderX = isSameColumn(toX(point.x), toX(headerPoint.x));
+      const isHeaderX =
+        getXAxisId(point) === getXAxisId(headerPoint) &&
+        isSameColumn(toX(point), toX(headerPoint));
       if (point.open == null || point.high == null || point.low == null) {
-        const y = this.formatY(input, point.value ?? point.y);
+        const y = this.formatY(input, point, point.value ?? point.y);
         rows.push({
           color: point.color,
           name: point.name,
-          value: isHeaderX ? y : `(${this.formatX(input, point.x)}, ${y})`,
+          value: isHeaderX
+            ? y
+            : `(${this.formatX(input, point, point.x)}, ${y})`,
         });
         return;
       }
@@ -411,7 +581,7 @@ export class HoverPainter {
       rows.push({
         color: point.color,
         name: point.name,
-        value: isHeaderX ? '' : this.formatX(input, point.x),
+        value: isHeaderX ? '' : this.formatX(input, point, point.x),
       });
       const values: [string, number][] = [
         ['Open', point.open],
@@ -420,7 +590,7 @@ export class HoverPainter {
         ['Close', point.y],
       ];
       values.forEach(([name, value]) =>
-        rows.push({ name, value: this.formatY(input, value) })
+        rows.push({ name, value: this.formatY(input, point, value) })
       );
     };
     points.forEach(addRows);

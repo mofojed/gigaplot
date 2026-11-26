@@ -96,6 +96,9 @@ export class CanvasRenderer implements PlotRenderer {
 
   private viewport: Bounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
 
+  /** Viewports of series on axes besides the primary ones. */
+  private seriesViewports: ReadonlyMap<string, Bounds> | undefined;
+
   private width = 0;
 
   private height = 0;
@@ -142,8 +145,16 @@ export class CanvasRenderer implements PlotRenderer {
     }
   }
 
-  setViewport(viewport: Bounds): void {
+  setViewport(
+    viewport: Bounds,
+    seriesViewports?: ReadonlyMap<string, Bounds>
+  ): void {
     this.viewport = viewport;
+    this.seriesViewports = seriesViewports;
+  }
+
+  private getSeriesViewport(seriesId: string): Bounds {
+    return this.seriesViewports?.get(seriesId) ?? this.viewport;
   }
 
   getSeriesData(seriesId: string): SeriesData | undefined {
@@ -203,20 +214,20 @@ export class CanvasRenderer implements PlotRenderer {
     context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
   }
 
-  private toScreenX(value: number): number {
-    const span = this.viewport.xMax - this.viewport.xMin;
+  private toScreenX(value: number, viewport: Bounds): number {
+    const span = viewport.xMax - viewport.xMin;
     if (span === 0) {
       return 0;
     }
-    return ((value - this.viewport.xMin) / span) * this.width;
+    return ((value - viewport.xMin) / span) * this.width;
   }
 
-  private toScreenY(value: number): number {
-    const span = this.viewport.yMax - this.viewport.yMin;
+  private toScreenY(value: number, viewport: Bounds): number {
+    const span = viewport.yMax - viewport.yMin;
     if (span === 0) {
       return this.height;
     }
-    return this.height - ((value - this.viewport.yMin) / span) * this.height;
+    return this.height - ((value - viewport.yMin) / span) * this.height;
   }
 
   private static drawLine(
@@ -490,7 +501,8 @@ export class CanvasRenderer implements PlotRenderer {
       return;
     }
     const context = this.context as Context2d;
-    const { theme, viewport, devicePixelRatio } = this;
+    const { theme, devicePixelRatio } = this;
+    const viewport = this.getSeriesViewport(descriptor.id);
     const fill =
       layer === 'fill'
         ? resolveAreaFill(
@@ -528,7 +540,7 @@ export class CanvasRenderer implements PlotRenderer {
         context,
         descriptor,
         data,
-        (x, y) => [this.toScreenX(x), this.toScreenY(y)],
+        (x, y) => [this.toScreenX(x, viewport), this.toScreenY(y, viewport)],
         color,
         size,
         bars,
@@ -565,15 +577,22 @@ export class CanvasRenderer implements PlotRenderer {
       layer,
       fill
     );
-    const screenLeft = this.toScreenX(grid.x.origin + left * grid.x.size);
-    const screenTop = this.toScreenY(grid.y.origin + top * grid.y.size);
+    const screenLeft = this.toScreenX(
+      grid.x.origin + left * grid.x.size,
+      viewport
+    );
+    const screenTop = this.toScreenY(
+      grid.y.origin + top * grid.y.size,
+      viewport
+    );
     context.imageSmoothingEnabled = false;
     context.drawImage(
       this.scratch,
       screenLeft,
       screenTop,
-      this.toScreenX(grid.x.origin + right * grid.x.size) - screenLeft,
-      this.toScreenY(grid.y.origin + bottom * grid.y.size) - screenTop
+      this.toScreenX(grid.x.origin + right * grid.x.size, viewport) -
+        screenLeft,
+      this.toScreenY(grid.y.origin + bottom * grid.y.size, viewport) - screenTop
     );
     context.imageSmoothingEnabled = true;
   }

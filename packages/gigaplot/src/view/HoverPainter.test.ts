@@ -151,3 +151,35 @@ it('labels each distinct x, keeping labels that would overlap apart', () => {
   const labelWidth = 4 + defaultPlotTheme.tooltipPadding * 2;
   expect(second[1] - first[1]).toBeGreaterThanOrEqual(labelWidth);
 });
+
+it('labels a value on the axis its series is drawn against', () => {
+  const canvas = document.createElement('canvas');
+  const painter = new HoverPainter(canvas);
+  const context = canvas.getContext('2d') as CanvasRenderingContext2D;
+  const fillText = jest.spyOn(context, 'fillText');
+  painter.paint({
+    width: 300,
+    height: 200,
+    area: { left: 50, top: 10, width: 200, height: 160 },
+    viewport: { xMin: 0, xMax: 100, yMin: 0, yMax: 100 },
+    seriesViewports: new Map([
+      ['b', { xMin: 0, xMax: 100, yMin: 0, yMax: 1000 }],
+    ]),
+    shape: { ...SHAPE, axes: [{ id: 'right', dimension: 'y' }] },
+    theme: defaultPlotTheme,
+    hover: {
+      ...HOVER,
+      points: [HOVER.points[0], { ...HOVER.points[1], y: 700, yAxis: 'right' }],
+    },
+    options: resolveTooltipOptions({ box: false, yAxisLabels: true }),
+  });
+
+  const labels = fillText.mock.calls.map(([text, x]) => ({ text, x }));
+  expect(labels).toEqual([
+    { text: '30.0', x: expect.any(Number) },
+    { text: '700', x: expect.any(Number) },
+  ]);
+  // Primary values sit left of the plot area, and the other axis' right of it
+  expect(labels[0].x).toBeLessThan(50);
+  expect(labels[1].x).toBeGreaterThan(250);
+});

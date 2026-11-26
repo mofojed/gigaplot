@@ -533,6 +533,41 @@ test("plots ticking market prices with and without a business calendar", async (
   });
 });
 
+test("zooms the second axis of the twin axes example with the first", async ({
+  page,
+}) => {
+  await page.getByTestId("renderer-select").selectOption("canvas");
+  await page.getByTestId("example-twin-axes").click();
+  await expectReady(page, 2);
+  await expect(page.getByTestId("plot-error")).toHaveCount(0);
+
+  // The volume axis is labelled right of the price plot's data
+  const data = page.locator(DATA_CANVAS).first();
+  const box = await data.boundingBox();
+  const axes = await page
+    .locator("canvas[data-dh-plot-layer=axes]")
+    .first()
+    .boundingBox();
+  const right = (box?.x ?? 0) + (box?.width ?? 0);
+  const clip = {
+    x: right,
+    y: box?.y ?? 0,
+    width: (axes?.x ?? 0) + (axes?.width ?? 0) - right,
+    height: box?.height ?? 0,
+  };
+  const before = await page.screenshot({ clip });
+
+  await page.mouse.move(
+    (box?.x ?? 0) + (box?.width ?? 0) / 2,
+    (box?.y ?? 0) + (box?.height ?? 0) / 2,
+  );
+  await page.mouse.wheel(0, -1200);
+  await expectReady(page, 2);
+  await expect
+    .poll(async () => (await page.screenshot({ clip })).equals(before))
+    .toBe(false);
+});
+
 test("zooms a business calendar axis in to times within sessions", async ({
   page,
 }) => {

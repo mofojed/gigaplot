@@ -201,7 +201,7 @@ test("draws, rotates, and ticks 3D plots without WebGPU errors", async ({
   expect(errors).toEqual([]);
 });
 
-test("draws scaled and calendar axes with WebGPU without errors", async ({
+test("draws scaled, calendar, and twin axes with WebGPU without errors", async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -211,7 +211,12 @@ test("draws scaled and calendar axes with WebGPU without errors", async ({
     }
   });
   await page.getByTestId("renderer-select").selectOption("webgpu");
-  for (const example of ["market-hours", "log-scale", "exp-scale"]) {
+  for (const example of [
+    "market-hours",
+    "log-scale",
+    "exp-scale",
+    "twin-axes",
+  ]) {
     await page.getByTestId(`example-${example}`).click();
     await expectReady(page, 2);
     await expect(page.getByTestId("active-renderer")).toHaveText("webgpu");

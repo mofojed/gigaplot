@@ -182,6 +182,59 @@ export interface SeriesDescriptor {
   stacked?: boolean;
   /** Known bounds of the full series, if the source can cheaply provide them. */
   bounds?: Bounds;
+  /**
+   * Id of the x axis the series is drawn against: one of the shape's `axes`,
+   * or the primary x axis, `x`, which is the default.
+   */
+  xAxis?: string;
+  /** Id of the y axis the series is drawn against. Defaults to the primary, `y`. */
+  yAxis?: string;
+}
+
+/** Id of the primary x axis, which series are drawn against by default. */
+export const PRIMARY_X_AXIS = 'x';
+
+/** Id of the primary y axis, which series are drawn against by default. */
+export const PRIMARY_Y_AXIS = 'y';
+
+/** The edge of the plot area an axis is drawn along. */
+export type PlotAxisSide = 'left' | 'right' | 'top' | 'bottom';
+
+/** A range of values along one axis. */
+export interface PlotRange {
+  min: number;
+  max: number;
+}
+
+/**
+ * An axis besides the primary x and y, such as a y axis on the right for
+ * series in other units. Series name it in their `xAxis` or `yAxis`. Zooming
+ * and panning move every axis together, so series stay where they are
+ * relative to each other.
+ */
+export interface PlotAxis {
+  /** Unique among the shape's axes, and not `x` or `y`. */
+  id: string;
+  /** Whether the axis measures x values, along the top or bottom, or y values. */
+  dimension: 'x' | 'y';
+  /**
+   * Which edge to draw it along. Defaults to `right` for a y axis, and `top`
+   * for an x axis. Axes sharing an edge are drawn side by side, outward from
+   * the plot area in order.
+   */
+  side?: PlotAxisSide;
+  label?: string;
+  /** Ticks for the axis. Defaults to evenly spaced numbers. */
+  ticks?: AxisTickGenerator;
+  /** Formats the axis' values in tooltips. */
+  formatter?: AxisValueFormatter;
+  /** How values map to positions along the axis. Defaults to linear. */
+  scale?: PlotScale;
+  /**
+   * The extent of the data on the axis, which the axis shows at home.
+   * Defaults to the union of the bounds of the series on it.
+   */
+  range?: PlotRange;
 }
 
 /** A labelled tick on an axis. */
@@ -215,8 +268,17 @@ export type AxisValueFormatter = (value: number, resolution: number) => string;
  */
 export interface PlotShape {
   series: SeriesDescriptor[];
-  /** Union of all series bounds, if known. Used to pick the initial viewport. */
+  /**
+   * Union of the bounds of the series on the primary axes, if known. Used to
+   * pick the initial viewport.
+   */
   bounds?: Bounds;
+  /** Axes besides the primary x and y, for series to name. 2D plots only. */
+  axes?: PlotAxis[];
+  /** Edge the primary x axis is drawn along. Defaults to `bottom`. */
+  xAxisSide?: 'bottom' | 'top';
+  /** Edge the primary y axis is drawn along. Defaults to `left`. */
+  yAxisSide?: 'left' | 'right';
   title?: string;
   xAxisLabel?: string;
   yAxisLabel?: string;

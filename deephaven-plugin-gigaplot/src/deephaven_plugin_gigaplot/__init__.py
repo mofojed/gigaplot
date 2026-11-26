@@ -3,15 +3,21 @@ A Deephaven element plugin for plotting tables with gigaplot
 """
 
 from .gigaplot import (
+    Axis,
+    AxisRef,
+    AxisSide,
     Camera,
     Fill,
     GradientStop,
     LegendPosition,
     LinearGradient,
+    Plot,
     PointScaling,
     TooltipPart,
     area,
+    axis,
     candlestick,
+    layer,
     line,
     line3d,
     linear_gradient,

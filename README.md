@@ -14,7 +14,8 @@ gigaplot draws with WebGPU, and falls back to Canvas 2D where WebGPU is not
 available. Sources and renderers can be swapped, and the library does not depend
 on Deephaven. It supports scatter, line, area, OHLC, and candlestick plots in
 2D, and scatter and line plots in 3D. 2D axes can use log, exponential, power,
-or business calendar scales.
+or business calendar scales, and plots can be layered, with a second y axis on
+the right or a second x axis along the top.
 
 ## Why gigaplot
 
@@ -137,6 +138,31 @@ gp.line(prices, x="Timestamp", y="Price", x_scale=gp.calendar_scale("USNYSE_EXAM
 See [scales](packages/gigaplot/docs/scales.md) for log, exponential, and power
 axes, and the
 [plugin's market hours examples](deephaven-plugin-gigaplot/README.md#market-hours-and-other-scales).
+
+### Layers and twin axes
+
+Plots can be drawn on top of each other, such as trades over quotes, or volume
+against an axis of its own beside the prices. Every axis zooms and pans with
+the others, and each layer is downsampled on its own.
+
+```ts
+import { LayeredDataSource } from "gigaplot";
+
+const source = new LayeredDataSource(
+  [{ source: prices }, { source: volumes, yAxis: "volume" }],
+  { axes: { volume: { side: "right", label: "Volume" } } },
+);
+```
+
+```python
+gp.layer(
+    gp.candlestick(bars, x="Timestamp", open="Open", high="High", low="Low", close="Close"),
+    gp.area(bars, x="Timestamp", y="Volume", y_axis="right", y_title="Volume"),
+)
+```
+
+See the
+[plugin's layering examples](deephaven-plugin-gigaplot/README.md#layers-and-twin-axes).
 
 ## Gallery
 

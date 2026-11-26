@@ -25,7 +25,9 @@ The source gives each axis its scale in the shape, as `xScale` and `yScale`, so
 the model decides how its axes read, including their ticks and labels. A plot
 can replace either one with its own, through `PlotViewOptions.xScale` or the
 `xScale` prop of `Plot`, such as to show the same data in clock time and in
-business time side by side. An axis with neither is linear.
+business time side by side. An axis with neither is linear. Axes besides the
+primary x and y take their scale from their `PlotAxis` in the shape, and each
+series is placed on the scales of the axes it is drawn against.
 
 ```tsx
 import {

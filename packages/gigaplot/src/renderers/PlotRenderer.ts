@@ -50,7 +50,15 @@ export interface PlotRenderer {
   /** Applies incremental changes. May fall back to a full redraw. */
   applyDeltas: (deltas: SeriesDelta[]) => void;
 
-  setViewport: (viewport: Bounds) => void;
+  /**
+   * The region the plot area shows. A series drawn against axes besides the
+   * primary ones has a region of its own, by id in `seriesViewports`, in the
+   * units of its axes; every other series uses `viewport`.
+   */
+  setViewport: (
+    viewport: Bounds,
+    seriesViewports?: ReadonlyMap<string, Bounds>
+  ) => void;
 
   /**
    * The pixel grid a downsampled series' data was made for. While the viewport

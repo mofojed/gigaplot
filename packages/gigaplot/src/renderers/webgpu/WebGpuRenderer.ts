@@ -168,6 +168,9 @@ export class WebGpuRenderer implements PlotRenderer {
 
   private viewport: Bounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
 
+  /** Viewports of series on axes besides the primary ones. */
+  private seriesViewports: ReadonlyMap<string, Bounds> | undefined;
+
   private width = 0;
 
   private height = 0;
@@ -460,8 +463,16 @@ export class WebGpuRenderer implements PlotRenderer {
     }
   }
 
-  setViewport(viewport: Bounds): void {
+  setViewport(
+    viewport: Bounds,
+    seriesViewports?: ReadonlyMap<string, Bounds>
+  ): void {
     this.viewport = viewport;
+    this.seriesViewports = seriesViewports;
+  }
+
+  private getSeriesViewport(seriesId: string): Bounds {
+    return this.seriesViewports?.get(seriesId) ?? this.viewport;
   }
 
   getSeriesData(seriesId: string): SeriesData | undefined {
@@ -532,13 +543,14 @@ export class WebGpuRenderer implements PlotRenderer {
 
   private writeUniforms(
     resources: SeriesResources,
+    viewport: Bounds,
     color: string,
     size: number,
     opacity: number,
     bar?: { halfWidth: number; isCandlestick: boolean }
   ): void {
     const { device } = this.shared as SharedWebGpu;
-    const { viewport, devicePixelRatio, theme } = this;
+    const { devicePixelRatio, theme } = this;
     const values = this.uniformValues;
     const [red, green, blue, alpha] = parseColor(color);
     const deviceWidth = this.width * devicePixelRatio;
@@ -592,7 +604,8 @@ export class WebGpuRenderer implements PlotRenderer {
     opacity: number
   ): GPUBindGroup {
     const { device, fillBindGroupLayout } = this.shared as SharedWebGpu;
-    const { theme, viewport } = this;
+    const { theme } = this;
+    const viewport = this.getSeriesViewport(descriptor.id);
     if (resources.fillUniformBuffer == null) {
       resources.fillUniformBuffer = device.createBuffer({
         label: `plot-fill-${descriptor.id}`,
@@ -654,13 +667,14 @@ export class WebGpuRenderer implements PlotRenderer {
       type === 'scatter'
         ? (descriptor.style?.pointSize ?? theme.pointSize)
         : (descriptor.style?.lineWidth ?? theme.lineWidth);
+    const viewport = this.getSeriesViewport(descriptor.id);
     if (type === 'area') {
       const segmentCount = resources.data.length - 1;
       // Data laid out for another type has not been replaced yet
       if (resources.stride !== AREA_STRIDE || segmentCount <= 0) {
         return;
       }
-      this.writeUniforms(resources, color, size, opacity);
+      this.writeUniforms(resources, viewport, color, size, opacity);
       if (layer === 'fill') {
         const bindGroup = this.writeFillUniforms(
           resources,
@@ -688,15 +702,21 @@ export class WebGpuRenderer implements PlotRenderer {
       if (length <= 0) {
         return;
       }
-      const { viewport } = this;
-      this.writeUniforms(resources, theme.ohlcIncreasingColor, size, opacity, {
-        halfWidth: getOhlcHalfBarWidth(
-          resources.barSpacing,
-          theme,
-          (viewport.xMax - viewport.xMin) / Math.max(1, this.width)
-        ),
-        isCandlestick,
-      });
+      this.writeUniforms(
+        resources,
+        viewport,
+        theme.ohlcIncreasingColor,
+        size,
+        opacity,
+        {
+          halfWidth: getOhlcHalfBarWidth(
+            resources.barSpacing,
+            theme,
+            (viewport.xMax - viewport.xMin) / Math.max(1, this.width)
+          ),
+          isCandlestick,
+        }
+      );
       pass.setPipeline(shared.ohlcPipeline);
       pass.setBindGroup(0, resources.bindGroup);
       const parts = isCandlestick ? 2 : 3;
@@ -714,7 +734,7 @@ export class WebGpuRenderer implements PlotRenderer {
     if (instanceCount <= 0) {
       return;
     }
-    this.writeUniforms(resources, color, size, opacity);
+    this.writeUniforms(resources, viewport, color, size, opacity);
     pass.setPipeline(isLine ? shared.linePipeline : shared.scatterPipeline);
     pass.setBindGroup(0, resources.bindGroup);
     // Instance indexes start at the first live point of a trimmed series

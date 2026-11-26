@@ -48,6 +48,13 @@ data units one screen pixel spans, so it can show as much precision as the plot
 resolves. Without one, values are numbers from `formatValue`. A source with
 custom ticks usually wants a matching formatter, such as dates for timestamps.
 
+A shape can add axes besides the primary x and y, in `axes`, each with an id,
+a dimension, an edge to be drawn along, and its own label, ticks, formatter,
+scale, and range. A series names the axes it is drawn against in `xAxis` and
+`yAxis`. `bounds` then covers only the series on the primary axes. Each series
+is requested in the units of its own axes: its `viewport`, `xScale`, and
+`yScale` are those of the axes it is drawn on.
+
 This split matters for large or remote data. A source can describe a billion row
 table instantly, then serve only what the current viewport can actually resolve.
 
@@ -137,6 +144,9 @@ each area's base is exactly the top of the one below.
 ## Bundled sources
 
 - **`StaticDataSource`** — arrays already in memory, downsampled per request.
+- **`LayeredDataSource`** — several sources drawn together as layers, each
+  against the axes it names. Series ids are prefixed with their layer's index.
+  See [architecture](architecture.md#axes).
 - **`StreamingDataSource`** — a seeded random walk that appends over time and
   emits `append` deltas. With `maxPoints`, it keeps a rolling window and also
   emits `trimStart` deltas. `tick()` drives it manually so tests do not need
