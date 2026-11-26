@@ -336,6 +336,23 @@ test("scatter stress draws every point and reports a frame rate", async ({
     .toBe(false);
 });
 
+test("plays Doom in a scatter plot of its palette", async ({ page }) => {
+  await page.getByTestId("renderer-select").selectOption("canvas");
+  await page.getByTestId("example-doom").click();
+  await expectReady(page);
+
+  await expect(page.getByTestId("doom-stats")).toContainText(
+    "64,000 points per frame",
+  );
+  await expect(page.getByTestId("plot-error")).toHaveCount(0);
+  await expectDrawn(page);
+
+  await page.getByTestId("doom-points-per-pixel").selectOption("0.25");
+  await expect(page.getByTestId("doom-stats")).toContainText(
+    "16,000 points per frame",
+  );
+});
+
 test("drags a 3D plot to rotate it", async ({ page }) => {
   await page.getByTestId("renderer-select").selectOption("canvas");
   await page.getByTestId("example-scatter-3d").click();

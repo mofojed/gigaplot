@@ -48,7 +48,8 @@ export interface ExampleOptions {
   stress: StressOptions;
 }
 
-export type ExampleLayout = "single" | "grid" | "cube" | "stack" | "quad";
+export type ExampleLayout =
+  "single" | "grid" | "cube" | "stack" | "quad" | "doom";
 
 /** Scales a plot uses in place of its source's. Keep them stable. */
 export interface PlotScaleOverrides {
@@ -1304,6 +1305,18 @@ export const examples: PlotExample[] = [
     supportsStressControls: true,
     autoStart: true,
     createSource: (_index, { stress }) => createStressSource(stress),
+  },
+  {
+    id: "doom",
+    name: "Doom",
+    description:
+      "Doom, played in a scatter plot. Every frame becomes 256 series, one " +
+      "per palette color, with a point for each pixel of that color, and " +
+      "every series is replaced on every frame. Hide colors, recolor them, " +
+      "bend the axes, or raise the points per pixel past a million.",
+    layout: "doom",
+    // The page runs the game and its source itself
+    createSources: () => [],
   },
 ];
 

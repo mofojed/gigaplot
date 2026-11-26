@@ -371,3 +371,125 @@ body {
     border-color: $accent;
   }
 }
+
+.doom-demo {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  width: 100%;
+}
+
+.doom-demo-stats {
+  color: $text-muted;
+  display: flex;
+  flex-wrap: wrap;
+  font-variant-numeric: tabular-nums;
+  gap: 4px 16px;
+}
+
+.doom-demo-body {
+  display: grid;
+  flex: 1 1 0;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  min-height: 0;
+}
+
+.doom-demo-stage {
+  // Sized from the space available, so the plot keeps Doom's 8:5 shape
+  container-type: size;
+  min-height: 0;
+  min-width: 0;
+}
+
+.doom-demo-plot {
+  height: min(100cqh, 62.5cqw);
+  outline: none;
+  position: relative;
+  width: min(100cqw, 160cqh);
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px $accent;
+  }
+}
+
+.doom-demo-focus-hint {
+  background: rgba(0, 0, 0, 0.7);
+  border-radius: 3px;
+  color: #fff;
+  left: 50%;
+  padding: 4px 10px;
+  pointer-events: none;
+  position: absolute;
+  top: 16px;
+  transform: translateX(-50%);
+}
+
+.doom-demo-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  overflow-y: auto;
+
+  label {
+    color: $text-strong;
+    font-size: 11px;
+    margin-top: 4px;
+  }
+
+  h3 {
+    color: $text-strong;
+    font-size: 11px;
+    font-weight: bold;
+    margin: 8px 0 0;
+  }
+}
+
+.doom-demo-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+
+  button {
+    background: $surface;
+    border: 1px solid $border;
+    border-radius: 3px;
+    color: $text;
+    cursor: pointer;
+    font-size: 11px;
+    padding: 2px 6px;
+  }
+}
+
+.doom-demo-palette {
+  display: grid;
+  gap: 1px;
+  grid-template-columns: repeat(16, minmax(0, 1fr));
+}
+
+.doom-demo-swatch {
+  aspect-ratio: 1;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+
+  &.is-unseen {
+    background: repeating-linear-gradient(
+      45deg,
+      $surface 0 2px,
+      $border 2px 4px
+    );
+  }
+
+  &.is-hidden {
+    opacity: 0.15;
+  }
+
+  &.is-hovered {
+    outline: 2px solid $text-strong;
+    position: relative;
+    z-index: 1;
+  }
+}

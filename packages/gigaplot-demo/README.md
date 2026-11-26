@@ -37,9 +37,10 @@ examples, drag to rotate instead.
 | Log scale          | Compound growth on linear and log axes                  |
 | Exponential, power | Exponential and power scales straightening their data   |
 | Great Scott!       | Back to the Future: fire trails, flux capacitor, 88 mph |
+| Doom               | Playable Doom as 256 scatter series, replaced per frame |
 
-Every example is seeded, so the output is identical on every run. That is what
-lets the e2e tests compare renders directly.
+Every example apart from Doom is seeded, so the output is identical on every
+run. That is what lets the e2e tests compare renders directly.
 
 ## Plot cube
 
@@ -65,6 +66,36 @@ achieves.
 
 Use WebGPU for the large counts. Canvas draws every point as a path on the main
 thread and drops to a few frames a second around a million points.
+
+## Doom
+
+Doom, playable, in a scatter plot. Every frame Doom draws is split by palette
+color into 256 scatter series, with a point for each pixel of that color, and
+every series on screen is replaced on every frame: 64,000 points at Doom's 35
+frames a second by default. Click the plot to give it the keyboard, then use
+the arrows to move, Ctrl to fire, Space to open doors, Enter to select, Alt and
+the arrows to strafe, and Escape for the menu.
+
+The colors are learned from the frames as they appear, and follow Doom's
+palette when it flashes red on taking damage. Everything else is a plot
+setting changed while the game runs:
+
+- **Points** splits each Doom pixel into 4, 9, or 16 points, up to a million
+  points a frame, or samples every other pixel.
+- **Point size** fits the points to the zoom by default. Pick a fixed size and
+  zoom in to see the frame is made of dots.
+- **Colors** recolors the series: the plot theme's colorway, night vision,
+  thermal, or a rainbow.
+- **Axis scale** puts power scales on both axes, which magnify or pinch the
+  middle of the screen.
+- The **palette grid** has a swatch per series. Click one to hide its color,
+  shift click to show it alone, or hide whole groups such as the browns.
+
+The game is the shareware episode compiled to wasm, from
+[deephaven-doom](https://github.com/mofojed/deephaven-doom), which loads only
+when the example is opened. Besides the RGBA frame it draws, the port exports
+`I_ReadScreen`, which copies out the palette indexed screen Doom renders, so
+pixels are split by palette index rather than by matching colors.
 
 ## Comparing renderers
 
