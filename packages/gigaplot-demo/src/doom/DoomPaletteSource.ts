@@ -1,7 +1,9 @@
 import {
   AbstractPlotDataSource,
   createSeriesData,
+  createSeriesData3D,
   type Bounds,
+  type Bounds3D,
   type PlotShape,
   type SeriesData,
   type SeriesDataRequest,
@@ -9,13 +11,8 @@ import {
   type SeriesDelta,
 } from "gigaplot";
 import { DOOM_HEIGHT, DOOM_WIDTH, type DoomFrame } from "./doomFrame";
-import {
-  PALETTE_SIZE,
-  UNSEEN,
-  getSeriesColor,
-  packRgb,
-  type DoomColorMode,
-} from "./doomColors";
+import { PALETTE_SIZE, getSeriesColor, type DoomColorMode } from "./doomColors";
+import { DoomPalette } from "./DoomPalette";
 
 /** Points drawn for each Doom pixel. A quarter samples every other pixel. */
 export const POINTS_PER_PIXEL_CHOICES = [0.25, 1, 4, 9, 16];
@@ -27,6 +24,21 @@ export interface DoomPlotOptions {
   colorMode: DoomColorMode;
   /** Palette indexes left out of the plot. */
   hidden: ReadonlySet<number>;
+  /**
+   * How far the brightest color stands above the darkest, in Doom pixels,
+   * around zero. Only read in 3D.
+   */
+  height?: number;
+}
+
+export interface DoomPaletteSourceConfig {
+  /** Shared with other views, so their colors stay in step. */
+  palette?: DoomPalette;
+  /**
+   * Plots `scatter3d` series, standing each pixel off the floor by its
+   * brightness, as a height field.
+   */
+  is3D?: boolean;
 }
 
 /** Centred on the crosshair, in Doom pixels, with y up as on any plot. */
@@ -35,6 +47,19 @@ export const DOOM_BOUNDS: Bounds = {
   xMax: DOOM_WIDTH / 2,
   yMin: -DOOM_HEIGHT / 2,
   yMax: DOOM_HEIGHT / 2,
+};
+
+/**
+ * The 3D box. A plot draws its box as a cube, so y spans as much as x to keep
+ * the frame's shape. z is squashed to a third of that, so heights stand out,
+ * and centred, as the camera looks at the middle of the box.
+ */
+export const DOOM_BOUNDS_3D: Bounds3D = {
+  ...DOOM_BOUNDS,
+  yMin: DOOM_BOUNDS.xMin,
+  yMax: DOOM_BOUNDS.xMax,
+  zMin: -50,
+  zMax: 50,
 };
 
 const SERIES_PREFIX = "palette-";
@@ -72,22 +97,22 @@ function getSampling(pointsPerPixel: number): {
  * plot redraws up to the whole frame on every tick. Colors are learned from
  * the frames as they appear, and change with Doom's palette, such as the red
  * flash on taking damage.
+ *
+ * In 3D, every point also stands up by its color's brightness, from below
+ * zero for black to above it for white.
  */
 export class DoomPaletteSource extends AbstractPlotDataSource {
   private options: DoomPlotOptions;
 
-  /** The color of each palette entry, or {@link UNSEEN}. */
-  private palette = new Int32Array(PALETTE_SIZE).fill(UNSEEN);
+  private palette: DoomPalette;
 
-  private series: SeriesData[] = Array.from({ length: PALETTE_SIZE }, () =>
-    createSeriesData(),
-  );
+  private is3D: boolean;
+
+  private series: SeriesData[];
 
   private hiddenMask = new Uint8Array(PALETTE_SIZE);
 
   private counts = new Uint32Array(PALETTE_SIZE);
-
-  private samples = new Int32Array(PALETTE_SIZE);
 
   private indexes = new Uint8Array(DOOM_WIDTH * DOOM_HEIGHT);
 
@@ -99,12 +124,21 @@ export class DoomPaletteSource extends AbstractPlotDataSource {
 
   private frameCount = 0;
 
-  private paletteListeners = new Set<(palette: Int32Array) => void>();
+  private paletteVersion: number;
 
-  constructor(options: DoomPlotOptions) {
+  constructor(
+    options: DoomPlotOptions,
+    { palette = new DoomPalette(), is3D = false }: DoomPaletteSourceConfig = {},
+  ) {
     super();
     this.options = options;
+    this.palette = palette;
+    this.is3D = is3D;
+    this.series = Array.from({ length: PALETTE_SIZE }, () =>
+      this.createData(0),
+    );
     this.updateHiddenMask();
+    this.paletteVersion = palette.version;
     this.shape = this.buildShape();
   }
 
@@ -133,17 +167,6 @@ export class DoomPaletteSource extends AbstractPlotDataSource {
     return this.frameCount;
   }
 
-  /** A copy of the colors learned so far, {@link UNSEEN} for the rest. */
-  getPalette(): Int32Array {
-    return this.palette.slice();
-  }
-
-  /** Calls `listener` with the palette whenever a color is learned or changes. */
-  onPaletteChanged(listener: (palette: Int32Array) => void): () => void {
-    this.paletteListeners.add(listener);
-    return () => this.paletteListeners.delete(listener);
-  }
-
   setOptions(changes: Partial<DoomPlotOptions>): void {
     const previous = this.options;
     this.options = { ...previous, ...changes };
@@ -157,7 +180,8 @@ export class DoomPaletteSource extends AbstractPlotDataSource {
     }
     if (
       options.hidden !== previous.hidden ||
-      options.pointsPerPixel !== previous.pointsPerPixel
+      options.pointsPerPixel !== previous.pointsPerPixel ||
+      options.height !== previous.height
     ) {
       this.updateHiddenMask();
       if (this.hasFrame) {
@@ -171,40 +195,20 @@ export class DoomPaletteSource extends AbstractPlotDataSource {
     this.frameCount += 1;
     this.indexes.set(frame.indexes);
     this.hasFrame = true;
-    if (this.learnPalette(frame)) {
+    this.palette.learn(frame);
+    // Polled rather than listened for, as the palette outlives the source
+    if (this.palette.version !== this.paletteVersion) {
+      this.paletteVersion = this.palette.version;
       this.shape = this.buildShape();
       this.fireShapeChanged(this.shape);
-      const palette = this.getPalette();
-      this.paletteListeners.forEach((listener) => listener(palette));
     }
     this.plotFrame();
   }
 
-  /** Reads the color of each palette index on screen. True if any changed. */
-  private learnPalette({ indexes, rgba, rgbaWidth }: DoomFrame): boolean {
-    const { samples, palette } = this;
-    samples.fill(-1);
-    for (let i = 0; i < indexes.length; i += 1) {
-      if (samples[indexes[i]] < 0) {
-        samples[indexes[i]] = i;
-      }
-    }
-    const scale = rgbaWidth / DOOM_WIDTH;
-    let isChanged = false;
-    for (let index = 0; index < PALETTE_SIZE; index += 1) {
-      const pixel = samples[index];
-      if (pixel >= 0) {
-        const column = pixel % DOOM_WIDTH;
-        const row = (pixel - column) / DOOM_WIDTH;
-        const offset = (row * scale * rgbaWidth + column * scale) * 4;
-        const rgb = packRgb(rgba[offset], rgba[offset + 1], rgba[offset + 2]);
-        if (palette[index] !== rgb) {
-          palette[index] = rgb;
-          isChanged = true;
-        }
-      }
-    }
-    return isChanged;
+  private createData(capacity: number): SeriesData {
+    return this.is3D
+      ? createSeriesData3D(capacity)
+      : createSeriesData(capacity);
   }
 
   private updateHiddenMask(): void {
@@ -220,13 +224,13 @@ export class DoomPaletteSource extends AbstractPlotDataSource {
       series: Array.from({ length: PALETTE_SIZE }, (_unused, index) => ({
         id: getPaletteSeriesId(index),
         name: `Palette ${index}`,
-        type: "scatter",
+        type: this.is3D ? "scatter3d" : "scatter",
         style: {
-          color: getSeriesColor(colorMode, index, this.palette[index]),
+          color: getSeriesColor(colorMode, index, this.palette.colors[index]),
           pointSize,
         },
       })),
-      bounds: DOOM_BOUNDS,
+      bounds: this.is3D ? DOOM_BOUNDS_3D : DOOM_BOUNDS,
     };
   }
 
@@ -234,7 +238,7 @@ export class DoomPaletteSource extends AbstractPlotDataSource {
     const data = this.series[index];
     if (data.x.length < capacity) {
       // Grown with headroom, as the count of a color changes on every frame
-      const next = createSeriesData(Math.ceil(capacity * 1.5));
+      const next = this.createData(Math.ceil(capacity * 1.5));
       this.series[index] = next;
       return next;
     }
@@ -243,6 +247,8 @@ export class DoomPaletteSource extends AbstractPlotDataSource {
 
   private plotFrame(): void {
     const { counts, indexes, hiddenMask, series } = this;
+    const { luminance } = this.palette;
+    const height = this.is3D ? (this.options.height ?? 0) : 0;
     const { step, split } = getSampling(this.options.pointsPerPixel);
     const pointsPerSample = split * split;
     const previousLengths = series.map((data) => data.length);
@@ -273,12 +279,17 @@ export class DoomPaletteSource extends AbstractPlotDataSource {
         if (hiddenMask[index] === 0) {
           const data = series[index];
           const x = left + column;
+          const { z } = data;
+          const pointZ = (luminance[index] - 0.5) * height;
           let { length } = data;
           for (let j = 0; j < split; j += 1) {
             const pointY = y - j * spacing;
             for (let i = 0; i < split; i += 1) {
               data.x[length] = x + i * spacing;
               data.y[length] = pointY;
+              if (z != null) {
+                z[length] = pointZ;
+              }
               length += 1;
             }
           }

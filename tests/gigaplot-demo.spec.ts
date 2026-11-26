@@ -336,7 +336,9 @@ test("scatter stress draws every point and reports a frame rate", async ({
     .toBe(false);
 });
 
-test("plays Doom in a scatter plot of its palette", async ({ page }) => {
+test("plays Doom in a palette scatter, ridgelines, and a 3D height field", async ({
+  page,
+}) => {
   await page.getByTestId("renderer-select").selectOption("canvas");
   await page.getByTestId("example-doom").click();
   await expectReady(page);
@@ -351,6 +353,22 @@ test("plays Doom in a scatter plot of its palette", async ({ page }) => {
   await expect(page.getByTestId("doom-stats")).toContainText(
     "16,000 points per frame",
   );
+
+  // The game keeps running into the other views
+  await page.getByTestId("doom-view-ridges").click();
+  await expectReady(page);
+  await expect(page.getByTestId("doom-stats")).toContainText(
+    "16,000 points per frame",
+  );
+  await expectDrawn(page);
+
+  await page.getByTestId("doom-view-height").click();
+  await expectReady(page);
+  await expect(page.getByTestId("doom-stats")).toContainText(
+    "64,000 points per frame",
+  );
+  await expect(page.getByTestId("plot-error")).toHaveCount(0);
+  await expectDrawn(page);
 });
 
 test("drags a 3D plot to rotate it", async ({ page }) => {
