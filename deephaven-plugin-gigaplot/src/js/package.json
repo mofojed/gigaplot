@@ -1,6 +1,7 @@
 {
   "name": "deephaven-plugin-gigaplot",
   "version": "0.0.1",
+  "private": true,
   "description": "plugin for Deephaven",
   "keywords": [
     "Deephaven",
@@ -34,9 +35,6 @@
     "@deephaven/plugin": "^1.33.1",
     "@deephaven/redux": "^1.33.0",
     "react-redux": "^7.2.9"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "files": [
     "dist/index.js"

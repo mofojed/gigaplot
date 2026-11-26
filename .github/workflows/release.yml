@@ -1,8 +1,9 @@
 name: Release
 
 # tools/release.sh pushes a <package>-v<version> tag, which builds, tests, and publishes
-# that package with trusted publishing, then creates the GitHub release. Run the workflow
-# by hand to build a package without publishing it. See RELEASE.md.
+# that package with trusted publishing: gigaplot to npm, and the plugin to PyPI. It then
+# creates the GitHub release. Run the workflow by hand to build a package without
+# publishing it. See RELEASE.md.
 
 on:
   push:
@@ -117,9 +118,13 @@ jobs:
         run: npm ci
 
       # The npm workspace and the cog package share a name, for both packages
-      - name: Build the npm package
+      - name: Build the JS
+        run: npm run build --workspace="$PACKAGE"
+
+      # The plugin's JS ships inside the wheel, so only gigaplot goes to npm
+      - name: Pack the npm package
+        if: env.PACKAGE == 'gigaplot'
         run: |
-          npm run build --workspace="$PACKAGE"
           mkdir -p dist/npm
           npm pack --workspace="$PACKAGE" --pack-destination dist/npm
 
@@ -153,7 +158,7 @@ jobs:
   publish-npm:
     name: Publish to npm
     needs: [prepare, test, build]
-    if: needs.prepare.outputs.publish == 'true'
+    if: needs.prepare.outputs.publish == 'true' && needs.prepare.outputs.package == 'gigaplot'
     runs-on: ubuntu-24.04
     environment: release
     permissions:
@@ -210,11 +215,11 @@ jobs:
   github-release:
     name: Create the GitHub release
     needs: [prepare, publish-npm, publish-pypi]
-    # publish-pypi is skipped for gigaplot
+    # Each package skips the other registry's publish job
     if: >-
       !cancelled()
-      && needs.publish-npm.result == 'success'
-      && (needs.publish-pypi.result == 'success' || needs.publish-pypi.result == 'skipped')
+      && !contains(needs.*.result, 'failure')
+      && (needs.publish-npm.result == 'success' || needs.publish-pypi.result == 'success')
     runs-on: ubuntu-24.04
     permissions:
       contents: write

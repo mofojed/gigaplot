@@ -1,18 +1,18 @@
 # Releasing
 
-This repository publishes three packages from two release tags:
+This repository publishes two packages, each from its own release tag:
 
-| Package                                                                                | Registry | Source                             | Tag                                    |
-| -------------------------------------------------------------------------------------- | -------- | ---------------------------------- | -------------------------------------- |
-| [`gigaplot`](https://www.npmjs.com/package/gigaplot)                                   | npm      | `packages/gigaplot`                | `gigaplot-v<version>`                  |
-| [`deephaven-plugin-gigaplot`](https://www.npmjs.com/package/deephaven-plugin-gigaplot) | npm      | `deephaven-plugin-gigaplot/src/js` | `deephaven-plugin-gigaplot-v<version>` |
-| [`deephaven_plugin_gigaplot`](https://pypi.org/project/deephaven-plugin-gigaplot/)     | PyPI     | `deephaven-plugin-gigaplot`        | `deephaven-plugin-gigaplot-v<version>` |
+| Package                                                                            | Registry | Source                      | Tag                                    |
+| ---------------------------------------------------------------------------------- | -------- | --------------------------- | -------------------------------------- |
+| [`gigaplot`](https://www.npmjs.com/package/gigaplot)                               | npm      | `packages/gigaplot`         | `gigaplot-v<version>`                  |
+| [`deephaven_plugin_gigaplot`](https://pypi.org/project/deephaven-plugin-gigaplot/) | PyPI     | `deephaven-plugin-gigaplot` | `deephaven-plugin-gigaplot-v<version>` |
 
 - `gigaplot` is versioned on its own and knows nothing about Deephaven.
-- The plugin's npm and Python packages always share a version and are released
-  together from one tag. The plugin bundles the gigaplot source, so it does not
-  depend on a published `gigaplot`, and a gigaplot fix also counts as a change
-  to the plugin.
+- The plugin's JS, in `deephaven-plugin-gigaplot/src/js`, ships inside the
+  Python wheel and is not published to npm. Its `package.json` is private, and
+  its version follows the Python package's.
+- The plugin bundles the gigaplot source, so it does not depend on a published
+  `gigaplot`, and a gigaplot fix also counts as a change to the plugin.
 
 Publishing uses [trusted publishing](https://docs.pypi.org/trusted-publishers/)
 on both registries. The release workflow gets short-lived credentials from
@@ -42,9 +42,9 @@ automatically, and PyPI adds attestations.
 2. The tag push starts the [Release workflow](.github/workflows/release.yml),
    which:
    - checks that the versions in the package files match the tag.
-   - runs the unit tests and type checks, and builds the npm tarball (and, for
-     the plugin, the wheel and sdist).
-   - publishes to npm, and for the plugin also to PyPI. These jobs run in the
+   - runs the unit tests and type checks, and builds the package: the npm
+     tarball for gigaplot, or the wheel and sdist for the plugin.
+   - publishes gigaplot to npm, or the plugin to PyPI. These jobs run in the
      `release` environment.
    - creates a GitHub release named after the tag, with the changelog section
      as its notes and the packages attached.
@@ -113,36 +113,33 @@ Run by hand, the workflow tests and builds the package and uploads it as an
 artifact, but skips publishing. Download the artifact to check what would be
 published.
 
-### 4. Create the npm packages and their trusted publishers
+### 4. Create the npm package and its trusted publisher
 
 Unlike PyPI, npm can only trust a workflow for a package that already exists,
-so each npm package needs one publish by hand first. The current `0.0.1`
-versions serve as that placeholder. From a clean, up to date `main`, signed in
-with `npm login` and with two-factor authentication on your account:
+so `gigaplot` needs one publish by hand first. Its current `0.0.1` version
+serves as that placeholder. From a clean, up to date `main`, signed in with
+`npm login` and with two-factor authentication on your account:
 
 ```bash
 npm ci
 npm run build -w gigaplot
 npm publish -w gigaplot
-npm run build -w deephaven-plugin-gigaplot
-npm publish -w deephaven-plugin-gigaplot
 ```
 
-Then trust the release workflow to publish them. With npm 11.15 or later:
+Then trust the release workflow to publish it. With npm 11.15 or later:
 
 ```bash
 npm trust github gigaplot --file release.yml --repo mofojed/gigaplot --env release --allow-publish
-npm trust github deephaven-plugin-gigaplot --file release.yml --repo mofojed/gigaplot --env release --allow-publish
 ```
 
-Or, on [npmjs.com](https://www.npmjs.com/), open each package's **Settings >
+Or, on [npmjs.com](https://www.npmjs.com/), open the package's **Settings >
 Trusted publishing**, choose **GitHub Actions**, and enter owner `mofojed`,
 repository `gigaplot`, workflow `release.yml`, and environment `release`.
 Allow `npm publish` as well as `npm stage publish`, since the workflow
 publishes directly.
 
 npm does not check these settings when you save them, and a new trusted
-publisher expires unless it publishes within 48 hours. Run the initial release
+publisher expires unless it publishes within 48 hours. Release gigaplot
 next.
 
 ## Initial release
@@ -164,16 +161,15 @@ next.
 3. Watch both runs of the
    [Release workflow](https://github.com/mofojed/gigaplot/actions/workflows/release.yml),
    and approve the `release` environment if you added reviewers. Check that
-   `0.1.0` is on npm for both packages and on PyPI, and that both GitHub
-   releases exist.
-4. Retire the placeholders:
+   `gigaplot` `0.1.0` is on npm, `deephaven-plugin-gigaplot` `0.1.0` is on
+   PyPI, and both GitHub releases exist.
+4. Retire the placeholder:
 
    ```bash
    npm deprecate gigaplot@0.0.1 "Placeholder for setting up publishing. Use 0.1.0 or later."
-   npm deprecate deephaven-plugin-gigaplot@0.0.1 "Placeholder for setting up publishing. Use 0.1.0 or later."
    ```
 
-5. On npmjs.com, set each package's **Settings > Publishing access** to
+5. On npmjs.com, set the package's **Settings > Publishing access** to
    **Require two-factor authentication and disallow tokens**. Trusted
    publishing keeps working, and nothing else can publish without your second
    factor.
@@ -209,7 +205,8 @@ next.
 A gigaplot fix usually means releasing both packages, gigaplot for npm users
 and the plugin to ship the fix to Deephaven. Release them one after the other.
 
-Versions are plain `MAJOR.MINOR.PATCH`. npm and PyPI write pre-release
+Versions are plain `MAJOR.MINOR.PATCH`. The plugin keeps the same version in
+its `package.json` and `setup.cfg`, and npm and PEP 440 write pre-release
 versions differently, so pre-releases are not supported.
 
 ## When something goes wrong
@@ -226,13 +223,14 @@ versions differently, so pre-releases are not supported.
   pull, and run the release again.
 - **A publish job failed** on something outside the code, such as an outage or
   a trusted publisher setting. Fix the cause and use **Re-run failed jobs** on
-  the run. The publish steps skip versions that are already on the registry,
-  so re-running after a partial publish is safe.
-- **npm says `ENEEDAUTH` or "Unable to authenticate".** The package's trusted
-  publisher does not match the run. Check that the owner, repository,
-  workflow (`release.yml`), and environment (`release`) are exact, and that
-  `npm publish` is allowed. A trusted publisher that has not published within
-  48 hours of being created expires. Delete it and add it again.
+  the run. The publish steps skip a version that is already on the registry,
+  so re-running is safe even if the publish itself went through.
+- **npm says `ENEEDAUTH` or "Unable to authenticate", or PyPI says
+  `invalid-publisher`.** The trusted publisher does not match the run. Check
+  that the owner, repository, workflow (`release.yml`), and environment
+  (`release`) are exact. On npm, also check that `npm publish` is allowed, and
+  that the trusted publisher published within 48 hours of being created. An
+  expired one has to be deleted and added again.
 - **The build or tests failed on the tag.** Fix the problem on `main` and
   release the next version. The failed version was never published, and only
   its tag and changelog entry remain.

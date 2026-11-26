@@ -21,7 +21,7 @@ Usage: $(basename "$0") <package> [options]
 
 Packages:
   gigaplot                    the gigaplot npm package
-  deephaven-plugin-gigaplot   the plugin's npm and Python packages, released together
+  deephaven-plugin-gigaplot   the plugin's Python package, which bundles its JS
 
 Options:
   --version <X.Y.Z>     release this version instead of computing it from the commits
