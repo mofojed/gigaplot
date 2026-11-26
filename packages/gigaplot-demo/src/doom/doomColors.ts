@@ -6,13 +6,14 @@ export const UNSEEN = -1;
 
 /** How the palette series are colored. */
 export type DoomColorMode =
-  "doom" | "colorway" | "night-vision" | "thermal" | "rainbow";
+  "doom" | "colorway" | "night-vision" | "thermal" | "vice-city" | "rainbow";
 
 export const DOOM_COLOR_MODES: { id: DoomColorMode; label: string }[] = [
   { id: "doom", label: "Doom palette" },
   { id: "colorway", label: "Plot colorway" },
   { id: "night-vision", label: "Night vision" },
   { id: "thermal", label: "Thermal" },
+  { id: "vice-city", label: "Vice City" },
   { id: "rainbow", label: "Rainbow" },
 ];
 
@@ -29,14 +30,35 @@ export const DOOM_COLOR_GROUPS: { id: DoomColorGroup; label: string }[] = [
   { id: "greys", label: "Greys" },
 ];
 
+type Rgb = [number, number, number];
+
 /** Thermal camera stops, from cold to hot. */
-const THERMAL_STOPS: [number, number, number][] = [
+const THERMAL_STOPS: Rgb[] = [
   [0, 0, 16],
   [72, 12, 120],
   [190, 30, 90],
   [245, 110, 20],
   [255, 220, 60],
   [255, 255, 240],
+];
+
+/** A Vice City sunset, from the night sky down to the sun. */
+const SUNSET_STOPS: Rgb[] = [
+  [18, 4, 43],
+  [61, 15, 110],
+  [155, 29, 143],
+  [255, 46, 136],
+  [255, 122, 69],
+  [255, 210, 138],
+];
+
+/** Vice City's sea, for what Doom draws in blues and greens. */
+const SEA_STOPS: Rgb[] = [
+  [6, 26, 48],
+  [11, 98, 122],
+  [25, 195, 201],
+  [127, 245, 232],
+  [232, 255, 249],
 ];
 
 export function packRgb(red: number, green: number, blue: number): number {
@@ -57,18 +79,38 @@ export function getLuminance(rgb: number): number {
   return (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255;
 }
 
-function getThermalColor(value: number): string {
-  const position = Math.min(1, Math.max(0, value)) * (THERMAL_STOPS.length - 1);
-  const index = Math.min(THERMAL_STOPS.length - 2, Math.floor(position));
+/** The color `value`, from 0 to 1, of the way along evenly spaced `stops`. */
+function interpolateStops(stops: Rgb[], value: number): string {
+  const position = Math.min(1, Math.max(0, value)) * (stops.length - 1);
+  const index = Math.min(stops.length - 2, Math.floor(position));
   const t = position - index;
-  const from = THERMAL_STOPS[index];
-  const to = THERMAL_STOPS[index + 1];
+  const from = stops[index];
+  const to = stops[index + 1];
   return toCssColor(
     packRgb(
       Math.round(from[0] + (to[0] - from[0]) * t),
       Math.round(from[1] + (to[1] - from[1]) * t),
       Math.round(from[2] + (to[2] - from[2]) * t),
     ),
+  );
+}
+
+/** A thermal camera color for `value`, from 0, cold, to 1, hot. */
+export function getThermalColor(value: number): string {
+  return interpolateStops(THERMAL_STOPS, value);
+}
+
+/**
+ * A Vice City color for `rgb`: a sunset of purples, pinks, and oranges by
+ * brightness, with blues and greens turned to a turquoise sea.
+ */
+export function getViceCityColor(rgb: number): string {
+  // Doom is dark, so brighten it towards the pinks and oranges
+  const level = getLuminance(rgb) ** 0.6;
+  const group = getColorGroup(rgb);
+  return interpolateStops(
+    group === "blues" || group === "greens" ? SEA_STOPS : SUNSET_STOPS,
+    level,
   );
 }
 
@@ -103,6 +145,8 @@ export function getSeriesColor(
     }
     case "thermal":
       return getThermalColor(luminance);
+    case "vice-city":
+      return getViceCityColor(rgb);
     case "rainbow": {
       // Palette ramps run in blocks of 16, so each ramp sweeps the spectrum
       const hue = ((index % 32) * 360) / 32;

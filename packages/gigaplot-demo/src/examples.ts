@@ -1310,10 +1310,10 @@ export const examples: PlotExample[] = [
     id: "doom",
     name: "Doom",
     description:
-      "Doom, played in a scatter plot. Every frame becomes 256 series, one " +
-      "per palette color, with a point for each pixel of that color, and " +
-      "every series is replaced on every frame. Hide colors, recolor them, " +
-      "bend the axes, or raise the points per pixel past a million.",
+      "Doom, played in a plot. In the palette scatter, every frame becomes " +
+      "256 series, one per palette color, replaced on every frame, up to a " +
+      "million points. Ridgelines draws it as the Unknown Pleasures album " +
+      "cover, and the height field stands every pixel up in 3D.",
     layout: "doom",
     // The page runs the game and its source itself
     createSources: () => [],

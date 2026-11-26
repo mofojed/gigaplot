@@ -37,7 +37,7 @@ examples, drag to rotate instead.
 | Log scale          | Compound growth on linear and log axes                  |
 | Exponential, power | Exponential and power scales straightening their data   |
 | Great Scott!       | Back to the Future: fire trails, flux capacitor, 88 mph |
-| Doom               | Playable Doom as 256 scatter series, replaced per frame |
+| Doom               | Playable Doom in a scatter, ridgelines, and 3D          |
 
 Every example apart from Doom is seeded, so the output is identical on every
 run. That is what lets the e2e tests compare renders directly.
@@ -69,27 +69,55 @@ thread and drops to a few frames a second around a million points.
 
 ## Doom
 
-Doom, playable, in a scatter plot. Every frame Doom draws is split by palette
-color into 256 scatter series, with a point for each pixel of that color, and
-every series on screen is replaced on every frame: 64,000 points at Doom's 35
-frames a second by default. Click the plot to give it the keyboard, then use
-the arrows to move, Ctrl to fire, Space to open doors, Enter to select, Alt and
-the arrows to strafe, and Escape for the menu.
+Doom, playable, in a plot. Click the plot to give it the keyboard, then use the
+arrows to move, Ctrl to fire, Space to open doors, Enter to select, Alt and the
+arrows to strafe, and Escape for the menu. The game keeps running as you switch
+between three views of it, and every setting can be changed while you play.
 
-The colors are learned from the frames as they appear, and follow Doom's
-palette when it flashes red on taking damage. Everything else is a plot
-setting changed while the game runs:
+### Palette scatter
+
+Every frame Doom draws is split by palette color into 256 scatter series, with
+a point for each pixel of that color, and every series on screen is replaced
+on every frame: 64,000 points at Doom's 35 frames a second by default.
 
 - **Points** splits each Doom pixel into 4, 9, or 16 points, up to a million
   points a frame, or samples every other pixel.
 - **Point size** fits the points to the zoom by default. Pick a fixed size and
   zoom in to see the frame is made of dots.
 - **Colors** recolors the series: the plot theme's colorway, night vision,
-  thermal, or a rainbow.
+  thermal, Vice City, or a rainbow. Vice City turns Doom into a sunset of
+  purples, pinks, and oranges by brightness, with its blues and greens as a
+  turquoise sea.
 - **Axis scale** puts power scales on both axes, which magnify or pinch the
   middle of the screen.
 - The **palette grid** has a swatch per series. Click one to hide its color,
   shift click to show it alone, or hide whole groups such as the browns.
+
+The colors are learned from the frames as they appear, and follow Doom's
+palette when it flashes red on taking damage.
+
+### Ridgelines
+
+After the pulsar plot on the cover of Joy Division's Unknown Pleasures. The
+frame is cut into bands of rows, 25 to 200 of them, and each band is a line
+series that rises with the brightness of its pixels. Lines further up the
+screen sit further back, and each is hidden behind the lines in front of it.
+That is done in the source, which runs each line along the silhouette in front
+wherever it would dip behind it. Untick it to see every line through the
+others. Each frame updates every line's points in place.
+
+The **Glow** style draws areas instead, each filled with a gradient that fades
+out a few lines below it, so the glows of neighbouring lines build on each
+other.
+
+### Height field (3D)
+
+The palette scatter in a 3D plot, with each pixel standing up by its
+brightness, so the HUD and lit walls rise and shadows sink. Drag to orbit the
+camera while you play. The colors and palette grid are shared with the palette
+scatter, so hiding the floor and walls leaves the monsters floating in space.
+
+### How it works
 
 The game is the shareware episode compiled to wasm, from
 [deephaven-doom](https://github.com/mofojed/deephaven-doom), which loads only

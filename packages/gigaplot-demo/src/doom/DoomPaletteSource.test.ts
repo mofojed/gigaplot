@@ -1,4 +1,5 @@
 import type { PlotShape, SeriesDelta } from "gigaplot";
+import { DoomPalette } from "./DoomPalette";
 import {
   DoomPaletteSource,
   getPaletteSeriesId,
@@ -126,10 +127,11 @@ it("empties hidden colors, and stops updating them once empty", () => {
 });
 
 it("colors each series from the frame, following palette changes", () => {
-  const source = new DoomPaletteSource(OPTIONS);
+  const palette = new DoomPalette();
+  const source = new DoomPaletteSource(OPTIONS, { palette });
   const { shapes } = listen(source);
   const palettes: Int32Array[] = [];
-  source.onPaletteChanged((palette) => palettes.push(palette));
+  palette.onChanged((colors) => palettes.push(colors));
   const pixels = [{ column: 10, row: 20, index: 7 }];
 
   source.pushFrame(createFrame(pixels, { 7: [255, 0, 0] }));
@@ -143,4 +145,27 @@ it("colors each series from the frame, following palette changes", () => {
   expect(palettes[1][7]).toBe(0xff8000);
   // Index 8 never appeared, so its color is unknown
   expect(palettes[1][8]).toBe(-1);
+});
+
+it("stands each point up by its brightness in 3D", async () => {
+  const source = new DoomPaletteSource(
+    { ...OPTIONS, height: 40 },
+    { is3D: true },
+  );
+  const { deltas } = listen(source);
+  source.pushFrame(
+    createFrame([{ column: 0, row: 0, index: 7 }], { 7: [255, 255, 255] }),
+  );
+
+  const shape = await source.getShape();
+  expect(shape.series[7].type).toBe("scatter3d");
+  const delta = deltas[0].find(
+    (candidate) => candidate.seriesId === getPaletteSeriesId(7),
+  );
+  if (delta?.type !== "replace") {
+    throw new Error("Expected palette 7 to be replaced");
+  }
+  expect(
+    Array.from(delta.data.z?.subarray(0, delta.data.length) ?? []),
+  ).toEqual([20]);
 });

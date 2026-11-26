@@ -493,3 +493,25 @@ body {
     z-index: 1;
   }
 }
+
+.doom-demo-views {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 4px;
+
+  button {
+    background: $surface;
+    border: 1px solid $border;
+    border-radius: 3px;
+    color: $text;
+    cursor: pointer;
+    padding: 5px 8px;
+    text-align: left;
+
+    &.is-selected {
+      border-color: $accent;
+      color: $text-strong;
+    }
+  }
+}
