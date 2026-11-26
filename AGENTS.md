@@ -22,6 +22,7 @@ unless noted.
 | `tests`                                                   | Playwright e2e tests against the demo and benchmark              |
 | `plans`                                                   | Plans for upcoming work, such as plotly-express parity           |
 | `.github/skills`                                          | Agent skills for the library and the plugin                      |
+| `tools`, `cog.toml`, `.github/workflows/release.yml`      | Release scripts and workflow, described in `RELEASE.md`          |
 
 The plugin bundles gigaplot **from source** (Vite alias and Jest
 `moduleNameMapper`), so library changes do not need a separate build to reach
@@ -120,6 +121,10 @@ style, and reformatting them buries the real change.
   imperative mood, lowercase, with no trailing period. Mark breaking changes
   with `!` after the type or scope and a `BREAKING CHANGE:` footer. Use the
   body to explain why.
+- Releases are cut with `tools/release.sh`, never by editing versions or
+  pushing tags by hand. See [RELEASE.md](RELEASE.md). The commit types and the
+  paths a commit touches decide which packages are released and how their
+  versions bump.
 
 ## Async lifecycle pitfalls
 

@@ -1,0 +1,249 @@
+name: Release
+
+# tools/release.sh pushes a <package>-v<version> tag, which builds, tests, and publishes
+# that package with trusted publishing, then creates the GitHub release. Run the workflow
+# by hand to build a package without publishing it. See RELEASE.md.
+
+on:
+  push:
+    tags:
+      - "gigaplot-v*"
+      - "deephaven-plugin-gigaplot-v*"
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Package to build. Nothing is published."
+        required: true
+        type: choice
+        options:
+          - gigaplot
+          - deephaven-plugin-gigaplot
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION_FILE: deephaven-plugin-gigaplot/src/js/.nvmrc
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-24.04
+    outputs:
+      package: ${{ steps.release.outputs.package }}
+      version: ${{ steps.release.outputs.version }}
+      publish: ${{ steps.release.outputs.publish }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Read the package and version
+        id: release
+        env:
+          INPUT_PACKAGE: ${{ inputs.package }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            echo "package=$INPUT_PACKAGE" >> "$GITHUB_OUTPUT"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          case "$GITHUB_REF_NAME" in
+            gigaplot-v*) package=gigaplot ;;
+            deephaven-plugin-gigaplot-v*) package=deephaven-plugin-gigaplot ;;
+            *) echo "::error::Unexpected tag $GITHUB_REF_NAME"; exit 1 ;;
+          esac
+          version="${GITHUB_REF_NAME#"$package-v"}"
+          tools/update_version.sh "$package" "$version" --check
+          {
+            echo "package=$package"
+            echo "version=$version"
+            echo "publish=true"
+          } >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Test
+    needs: prepare
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: ${{ env.NODE_VERSION_FILE }}
+          # Release builds never restore a cache, so a poisoned cache cannot reach a published package
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests
+        run: npx jest
+
+      - name: Type check
+        run: |
+          (cd packages/gigaplot && npx tsc --noEmit -p .)
+          (cd deephaven-plugin-gigaplot/src/js && npx tsc --noEmit -p .)
+
+  build:
+    name: Build
+    needs: prepare
+    runs-on: ubuntu-24.04
+    env:
+      PACKAGE: ${{ needs.prepare.outputs.package }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: ${{ env.NODE_VERSION_FILE }}
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The npm workspace and the cog package share a name, for both packages
+      - name: Build the npm package
+        run: |
+          npm run build --workspace="$PACKAGE"
+          mkdir -p dist/npm
+          npm pack --workspace="$PACKAGE" --pack-destination dist/npm
+
+      - name: Setup Python
+        if: env.PACKAGE == 'deephaven-plugin-gigaplot'
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # setup.py bundles the JS built above into the wheel
+      - name: Build the Python package
+        if: env.PACKAGE == 'deephaven-plugin-gigaplot'
+        run: |
+          python -m pip install --upgrade build
+          python -m build --sdist --wheel --outdir dist/pypi deephaven-plugin-gigaplot
+
+      # package_js skips the JS without an error when it is missing, which would ship a plugin that cannot draw
+      - name: Check the wheel bundles the JS
+        if: env.PACKAGE == 'deephaven-plugin-gigaplot'
+        run: |
+          python -m zipfile -l dist/pypi/*.whl | grep -q 'deephaven_plugin_gigaplot/_js/dist/index.js' \
+            || { echo "::error::The wheel does not contain the JS bundle"; exit 1; }
+
+      - name: Upload the packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish-npm:
+    name: Publish to npm
+    needs: [prepare, test, build]
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          # Trusted publishing needs npm 11.5.1 or later, which Node 24 ships
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - name: Download the packages
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+
+      # Skipping a published version lets a failed release be re-run
+      - name: Publish
+        env:
+          PACKAGE: ${{ needs.prepare.outputs.package }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          if [ "$(npm view "$PACKAGE@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
+            echo "$PACKAGE@$VERSION is already on npm"
+            exit 0
+          fi
+          npm publish dist/npm/*.tgz
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [prepare, test, build]
+    if: needs.prepare.outputs.publish == 'true' && needs.prepare.outputs.package == 'deephaven-plugin-gigaplot'
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      id-token: write
+    steps:
+      - name: Download the packages
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/pypi/
+          skip-existing: true
+
+  github-release:
+    name: Create the GitHub release
+    needs: [prepare, publish-npm, publish-pypi]
+    # publish-pypi is skipped for gigaplot
+    if: >-
+      !cancelled()
+      && needs.publish-npm.result == 'success'
+      && (needs.publish-pypi.result == 'success' || needs.publish-pypi.result == 'skipped')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Download the packages
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE: ${{ needs.prepare.outputs.package }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          case "$PACKAGE" in
+            gigaplot) changelog=packages/gigaplot/CHANGELOG.md ;;
+            deephaven-plugin-gigaplot) changelog=deephaven-plugin-gigaplot/CHANGELOG.md ;;
+          esac
+          tools/extract_changelog.sh "$changelog" > notes.md
+          mapfile -t files < <(find dist -type f)
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" "${files[@]}" --verify-tag --title "$TAG" --notes-file notes.md --repo "$GITHUB_REPOSITORY"
+          fi

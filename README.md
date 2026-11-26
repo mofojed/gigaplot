@@ -280,6 +280,8 @@ for the library and the plugin are in [.github/skills](.github/skills).
 Commit messages follow
 [Conventional Commits](https://www.conventionalcommits.org/), such as
 `fix(view): draw plots whose bounds arrive while the renderer initializes`.
+Releases compute versions and changelogs from them, as described in
+[RELEASE.md](RELEASE.md).
 
 ## License
 

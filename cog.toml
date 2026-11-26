@@ -1,0 +1,54 @@
+# Release configuration for cocogitto (cog). See RELEASE.md.
+# Run releases through tools/release.sh, which checks the checkout first.
+
+from_latest_tag = true
+ignore_merge_commits = true
+# Each package is versioned and tagged on its own, as <package>-v<version>
+generate_mono_repository_global_tag = false
+branch_whitelist = ["main"]
+tag_prefix = "v"
+
+# Hooks run from the package directory, so they find the tools through git.
+# {{version}} is the new version and {{latest}} the one before it.
+pre_package_bump_hooks = [
+    "echo Releasing {{package}} {{latest|0.0.0}} to {{version}}",
+    "\"$(git rev-parse --show-toplevel)\"/tools/confirm.sh",
+    # cog includes these edits in the bump commit it tags
+    "\"$(git rev-parse --show-toplevel)\"/tools/update_version.sh {{package}} {{version}}",
+]
+post_package_bump_hooks = [
+    # Builds from main between releases carry a .dev0 Python version
+    "\"$(git rev-parse --show-toplevel)\"/tools/update_version.sh {{package}} {{version}} --dev",
+    "git diff --quiet HEAD || git commit --all --message 'chore(release): mark {{package}} as {{version}}.dev0 on main'",
+    # Push the tag and main together, so the tag that triggers publishing never lands without main
+    "git push --atomic ${RELEASE_REMOTE:-origin} main {{package}}-v{{version}}",
+]
+
+[commit_types]
+chore = { changelog_title = "", omit_from_changelog = true }
+ci = { changelog_title = "", omit_from_changelog = true }
+test = { changelog_title = "", omit_from_changelog = true }
+
+[changelog]
+path = "CHANGELOG.md"
+template = "remote"
+package_template = "package_remote"
+remote = "github.com"
+owner = "mofojed"
+repository = "gigaplot"
+# signature must match `git log --format=%an`, username is the GitHub handle
+authors = [
+    { username = "mofojed", signature = "mikebender" },
+    { username = "mofojed", signature = "Mike Bender" },
+]
+
+# cog 7 reads packages from [monorepo.packages]; cog 6 read them from [packages]
+[monorepo.packages.gigaplot]
+path = "packages/gigaplot"
+public_api = false
+
+[monorepo.packages.deephaven-plugin-gigaplot]
+path = "deephaven-plugin-gigaplot"
+# The plugin bundles the gigaplot source, so library changes release the plugin too
+include = ["packages/gigaplot/src/**"]
+public_api = false
