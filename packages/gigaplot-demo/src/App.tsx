@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   DEFAULT_TOOLTIP_OPTIONS,
   defaultRendererRegistry,
@@ -25,6 +33,9 @@ import { PlotCube } from "./PlotCube";
 import { RollingScatterSource } from "./sources/RollingScatterSource";
 import { isStreamable } from "./sources/StreamableSource";
 import "./App.scss";
+
+// Loaded on demand, as the game is 7 MB of wasm
+const DoomDemo = lazy(() => import("./doom/DoomDemo"));
 
 type RendererChoice = "auto" | "webgpu" | "canvas";
 
@@ -61,6 +72,7 @@ const LAYOUT_THEMES: Record<ExampleLayout, PlotThemeOverrides | undefined> = {
   cube: CUBE_THEME,
   stack: undefined,
   quad: undefined,
+  doom: undefined,
 };
 
 const TOOLTIP_PARTS: {
@@ -365,20 +377,24 @@ export function App(): JSX.Element {
           <option value="light">Light</option>
         </select>
 
-        <h2>
-          <label htmlFor="legend-select">Legend</label>
-        </h2>
-        <select
-          id="legend-select"
-          data-testid="legend-select"
-          value={legendPosition}
-          onChange={(event) =>
-            setLegendPosition(event.target.value as PlotLegendPosition)
-          }
-        >
-          <option value="overlay">On the plot</option>
-          <option value="right">Beside the plot</option>
-        </select>
+        {layout !== "doom" && (
+          <>
+            <h2>
+              <label htmlFor="legend-select">Legend</label>
+            </h2>
+            <select
+              id="legend-select"
+              data-testid="legend-select"
+              value={legendPosition}
+              onChange={(event) =>
+                setLegendPosition(event.target.value as PlotLegendPosition)
+              }
+            >
+              <option value="overlay">On the plot</option>
+              <option value="right">Beside the plot</option>
+            </select>
+          </>
+        )}
 
         {layout !== "cube" && hasPlot2D && (
           <fieldset className="plot-demo-tooltip-controls">
@@ -516,6 +532,17 @@ export function App(): JSX.Element {
         )}
         {layout === "cube" && (
           <PlotCube faces={plots} labels={example.plotTitles} />
+        )}
+        {layout === "doom" && (
+          <Suspense fallback={<div className="doom-demo">Loading Doom…</div>}>
+            <DoomDemo
+              key={rendererChoice}
+              rendererPreference={RENDERER_PREFERENCES[rendererChoice]}
+              tooltip={tooltip}
+              onRendererChanged={setActiveRenderer}
+              onError={handleError}
+            />
+          </Suspense>
         )}
         {(layout === "stack" || layout === "quad") && (
           <div
