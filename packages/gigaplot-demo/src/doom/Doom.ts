@@ -1,4 +1,5 @@
 import doomUrl from "./doom.wasm?url";
+import { patchDemoVersions } from "./doomDemos";
 import { DOOM_HEIGHT, DOOM_WIDTH, type DoomFrame } from "./doomFrame";
 
 /** Size of the RGBA frame the port hands to `js_draw_screen`. */
@@ -131,6 +132,7 @@ export class Doom {
     const exports = instance.exports as unknown as DoomExports;
     this.exports = exports;
     this.screenPointer = exports.malloc(DOOM_WIDTH * DOOM_HEIGHT);
+    patchDemoVersions(new Uint8Array(memory.buffer));
     exports.main();
     this.animationFrame = requestAnimationFrame(this.handleAnimationFrame);
   }

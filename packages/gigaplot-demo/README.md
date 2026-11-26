@@ -130,6 +130,11 @@ when the example is opened. Besides the RGBA frame it draws, the port exports
 `I_ReadScreen`, which copies out the palette indexed screen Doom renders, so
 pixels are split by palette index rather than by matching colors.
 
+Until a game is started, the title screen plays the shareware WAD's demos.
+They were recorded by Doom 1.9, and the port's linuxdoom 1.10 engine rejects
+them as from a different version, so the demo restamps them in the WAD before
+the game starts (`doomDemos.ts`).
+
 ## Comparing renderers
 
 **Many plots** is the example to reach for. WebGL caps a document at roughly
