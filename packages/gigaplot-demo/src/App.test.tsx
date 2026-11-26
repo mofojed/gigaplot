@@ -11,6 +11,19 @@ beforeEach(() => {
 
 afterEach(() => {
   boundingRectSpy.mockRestore();
+  // Examples are picked from the hash, which outlives each test
+  window.history.replaceState(null, "", "/");
+});
+
+it("opens the example named in the URL hash, and names the one picked", () => {
+  window.history.replaceState(null, "", "/#line");
+  render(<App />);
+  expect(screen.getByTestId("example-line").className).toBe("is-selected");
+
+  fireEvent.click(screen.getByTestId("example-scatter"));
+
+  expect(window.location.hash).toBe("#scatter");
+  expect(screen.getByTestId("example-scatter").className).toBe("is-selected");
 });
 
 it("renders every example option", async () => {

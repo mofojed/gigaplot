@@ -89,6 +89,12 @@ const TOOLTIP_PARTS: {
 /** How often the frame rate readout refreshes. */
 const FPS_SAMPLE_MS = 500;
 
+/** The example named by the URL's hash, such as `#doom`, so it can be linked to. */
+function getHashExampleId(): string | undefined {
+  const id = decodeURIComponent(window.location.hash.slice(1));
+  return examples.some((example) => example.id === id) ? id : undefined;
+}
+
 function formatCount(value: number): string {
   if (value >= 1_000_000) {
     return `${value / 1_000_000}M`;
@@ -100,7 +106,9 @@ function formatCount(value: number): string {
 }
 
 export function App(): JSX.Element {
-  const [exampleId, setExampleId] = useState(examples[0].id);
+  const [exampleId, setExampleId] = useState(
+    () => getHashExampleId() ?? examples[0].id,
+  );
   const [rendererChoice, setRendererChoice] = useState<RendererChoice>("auto");
   const [demoTheme, setDemoTheme] = useState<DemoTheme>("dark");
   const [activeRenderer, setActiveRenderer] = useState<string>("");
@@ -120,6 +128,24 @@ export function App(): JSX.Element {
   const [isWebGpuSupported, setIsWebGpuSupported] = useState<boolean | null>(
     null,
   );
+
+  useEffect(function followHash() {
+    // Back and forward move between the examples picked
+    const handleHashChange = () => {
+      setExampleId(getHashExampleId() ?? examples[0].id);
+    };
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
+
+  const selectExample = useCallback((id: string) => {
+    setExampleId(id);
+    const url = new URL(window.location.href);
+    url.hash = id;
+    if (url.href !== window.location.href) {
+      window.history.pushState(null, "", url);
+    }
+  }, []);
 
   useEffect(function probeWebGpu() {
     let cancelled = false;
@@ -336,7 +362,7 @@ export function App(): JSX.Element {
                 type="button"
                 data-testid={`example-${item.id}`}
                 className={item.id === exampleId ? "is-selected" : undefined}
-                onClick={() => setExampleId(item.id)}
+                onClick={() => selectExample(item.id)}
               >
                 {item.name}
               </button>
