@@ -135,6 +135,11 @@ They were recorded by Doom 1.9, and the port's linuxdoom 1.10 engine rejects
 them as from a different version, so the demo restamps them in the WAD before
 the game starts (`doomDemos.ts`).
 
+The view starts at full width above the status bar, rather than Doom's default
+of a smaller view inside a border. The port has no config file, so the demo
+changes the `screenblocks` default in the port's memory (`doomDefaults.ts`).
+Screen Size in the Options menu still changes it.
+
 ## Comparing renderers
 
 **Many plots** is the example to reach for. WebGL caps a document at roughly

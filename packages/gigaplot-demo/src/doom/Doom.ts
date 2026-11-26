@@ -1,4 +1,5 @@
 import doomUrl from "./doom.wasm?url";
+import { FULL_SCREEN_BLOCKS, setDoomDefault } from "./doomDefaults";
 import { patchDemoVersions } from "./doomDemos";
 import { DOOM_HEIGHT, DOOM_WIDTH, type DoomFrame } from "./doomFrame";
 
@@ -132,7 +133,9 @@ export class Doom {
     const exports = instance.exports as unknown as DoomExports;
     this.exports = exports;
     this.screenPointer = exports.malloc(DOOM_WIDTH * DOOM_HEIGHT);
-    patchDemoVersions(new Uint8Array(memory.buffer));
+    const bytes = new Uint8Array(memory.buffer);
+    patchDemoVersions(bytes);
+    setDoomDefault(bytes, "screenblocks", FULL_SCREEN_BLOCKS);
     exports.main();
     this.animationFrame = requestAnimationFrame(this.handleAnimationFrame);
   }
