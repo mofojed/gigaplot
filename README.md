@@ -167,7 +167,8 @@ See the
 ## Gallery
 
 From the [demo app](packages/gigaplot-demo), which runs with `npm start` and
-needs no server.
+needs no server. It is also [published](https://mofojed.github.io/gigaplot/),
+where you can [play Doom in a plot](https://mofojed.github.io/gigaplot/#doom).
 
 <table>
   <tr>

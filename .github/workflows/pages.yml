@@ -1,0 +1,42 @@
+name: Deploy demo to Pages
+
+# Publishes the demo, Doom included, to https://mofojed.github.io/gigaplot/.
+# Link to an example by its id, such as https://mofojed.github.io/gigaplot/#doom.
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: deephaven-plugin-gigaplot/src/js/.nvmrc
+          cache: npm
+      - run: npm ci
+      # Production builds of the demo bundle gigaplot from its dist, not its source
+      - run: npm run build -w gigaplot
+      - run: npm run build -w gigaplot-demo
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: packages/gigaplot-demo/build
+      - id: deployment
+        uses: actions/deploy-pages@v4
