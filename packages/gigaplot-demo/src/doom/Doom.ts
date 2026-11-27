@@ -1,4 +1,5 @@
 import doomUrl from "./doom.wasm?url";
+import wadUrl from "./doom1.wad?url";
 import { DoomAudio, type DoomAudioExports } from "./DoomAudio";
 import { DOOM_HEIGHT, DOOM_WIDTH, type DoomFrame } from "./doomFrame";
 
@@ -16,30 +17,41 @@ interface DoomExports extends DoomAudioExports {
   add_browser_event: (event: number, keyCode: number) => void;
   /** Copies the 8 bit, palette indexed screen into `pointer`. */
   I_ReadScreen: (pointer: number) => void;
+  /** Allocates `length` bytes for the IWAD, which must be filled before `main`. */
+  doom_iwad_buffer: (length: number) => number;
 }
 
-let modulePromise: Promise<WebAssembly.Module> | undefined;
+interface DoomFiles {
+  module: WebAssembly.Module;
+  wad: Uint8Array;
+}
+
+let filesPromise: Promise<DoomFiles> | undefined;
+
+async function fetchBytes(url: string, name: string): Promise<ArrayBuffer> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Unable to load ${name}: ${response.status}`);
+  }
+  return response.arrayBuffer();
+}
 
 /**
- * Compiles the port once per page. React's strict mode starts and stops the
- * game twice, and recompiling 7 MB of wasm each time is noticeable.
+ * Loads the port and the shareware IWAD once per page. React's strict mode
+ * starts and stops the game twice, and reloading 5 MB each time is noticeable.
  */
-function compileDoom(): Promise<WebAssembly.Module> {
-  if (modulePromise == null) {
-    // Not compileStreaming, which rejects hosts that serve the wrong MIME type
-    modulePromise = fetch(doomUrl)
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`Unable to load Doom: ${response.status}`);
-        }
-        return response.arrayBuffer();
-      })
-      .then((bytes) => WebAssembly.compile(bytes));
-    modulePromise.catch(() => {
-      modulePromise = undefined;
+function loadDoom(): Promise<DoomFiles> {
+  if (filesPromise == null) {
+    filesPromise = Promise.all([
+      // Not compileStreaming, which rejects hosts that serve the wrong MIME type
+      fetchBytes(doomUrl, "Doom").then((bytes) => WebAssembly.compile(bytes)),
+      fetchBytes(wadUrl, "doom1.wad").then((bytes) => new Uint8Array(bytes)),
+    ]).then(([module, wad]) => ({ module, wad }));
+    filesPromise.catch(() => {
+      filesPromise = undefined;
     });
   }
-  return modulePromise;
+  return filesPromise;
 }
 
 /** Doom mostly uses browser key codes, apart from these. */
@@ -107,7 +119,7 @@ export class Doom {
 
   /** Loads the game and starts running it once per animation frame. */
   async start(): Promise<void> {
-    const module = await compileDoom();
+    const { module, wad } = await loadDoom();
     if (this.isStopped) {
       return;
     }
@@ -135,6 +147,9 @@ export class Doom {
     const exports = instance.exports as unknown as DoomExports;
     this.exports = exports;
     this.screenPointer = exports.malloc(DOOM_WIDTH * DOOM_HEIGHT);
+    const wadPointer = exports.doom_iwad_buffer(wad.length);
+    // After allocating, as memory growth detaches the old buffer
+    new Uint8Array(memory.buffer, wadPointer, wad.length).set(wad);
     exports.main();
     if (typeof AudioContext !== "undefined") {
       this.audio = new DoomAudio(new AudioContext(), memory, exports);

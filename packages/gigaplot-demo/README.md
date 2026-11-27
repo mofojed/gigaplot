@@ -125,12 +125,13 @@ scatter, so hiding the floor and walls leaves the monsters floating in space.
 
 ### How it works
 
-The game is the shareware episode compiled to wasm, built from
+The game is Doom compiled to wasm, built from
 [mofojed/wasm-fizzbuzz](https://github.com/mofojed/wasm-fizzbuzz/tree/main/doom),
-which loads only when the example is opened. Besides the RGBA frame it draws,
-the port exports `I_ReadScreen`, which copies out the palette indexed screen
-Doom renders, so pixels are split by palette index rather than by matching
-colors.
+and plays the shareware episode in `src/doom/doom1.wad`. Both load only when the
+example is opened, and the WAD is copied into the game's memory before it
+starts. Besides the RGBA frame it draws, the port exports `I_ReadScreen`, which
+copies out the palette indexed screen Doom renders, so pixels are split by
+palette index rather than by matching colors.
 
 That fork of the port plays the shareware WAD's demos behind the title screen,
 starts with the view at full width above the status bar, and adds sound
@@ -141,7 +142,8 @@ audio is mixed and dropped at the same pace, so the music is in the right place
 once it starts.
 
 To update the game, run `make` in the fork's `doom` directory and copy its
-`doom.wasm` over `src/doom/doom.wasm`.
+`doom.wasm` over `src/doom/doom.wasm`. The WAD comes from the fork's
+`doom/doom1.wad`.
 
 ## Comparing renderers
 
