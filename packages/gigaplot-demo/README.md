@@ -74,10 +74,11 @@ thread and drops to a few frames a second around a million points.
 
 ## Doom
 
-Doom, playable, in a plot. Click the plot to give it the keyboard, then use the
-arrows to move, Ctrl to fire, Space to open doors, Enter to select, Alt and the
-arrows to strafe, and Escape for the menu. The game keeps running as you switch
-between three views of it, and every setting can be changed while you play.
+Doom, playable, in a plot. Click the plot to give it the keyboard and turn on
+the sound, then use the arrows to move, Ctrl to fire, Space to open doors, Enter
+to select, Alt and the arrows to strafe, and Escape for the menu. Tick **Mute
+sound** to silence it. The game keeps running as you switch between three views
+of it, and every setting can be changed while you play.
 
 ### Palette scatter
 
@@ -124,21 +125,23 @@ scatter, so hiding the floor and walls leaves the monsters floating in space.
 
 ### How it works
 
-The game is the shareware episode compiled to wasm, from
-[deephaven-doom](https://github.com/mofojed/deephaven-doom), which loads only
-when the example is opened. Besides the RGBA frame it draws, the port exports
-`I_ReadScreen`, which copies out the palette indexed screen Doom renders, so
-pixels are split by palette index rather than by matching colors.
+The game is the shareware episode compiled to wasm, built from
+[mofojed/wasm-fizzbuzz](https://github.com/mofojed/wasm-fizzbuzz/tree/main/doom),
+which loads only when the example is opened. Besides the RGBA frame it draws,
+the port exports `I_ReadScreen`, which copies out the palette indexed screen
+Doom renders, so pixels are split by palette index rather than by matching
+colors.
 
-Until a game is started, the title screen plays the shareware WAD's demos.
-They were recorded by Doom 1.9, and the port's linuxdoom 1.10 engine rejects
-them as from a different version, so the demo restamps them in the WAD before
-the game starts (`doomDemos.ts`).
+That fork of the port plays the shareware WAD's demos behind the title screen,
+starts with the view at full width above the status bar, and adds sound
+effects and OPL music. Its `doom_audio_mix` export mixes them on demand, and
+`DoomAudio.ts` plays them through Web Audio after each game step. Browsers keep
+audio off until the page is clicked or gets a key press, and until then the
+audio is mixed and dropped at the same pace, so the music is in the right place
+once it starts.
 
-The view starts at full width above the status bar, rather than Doom's default
-of a smaller view inside a border. The port has no config file, so the demo
-changes the `screenblocks` default in the port's memory (`doomDefaults.ts`).
-Screen Size in the Options menu still changes it.
+To update the game, run `make` in the fork's `doom` directory and copy its
+`doom.wasm` over `src/doom/doom.wasm`.
 
 ## Comparing renderers
 

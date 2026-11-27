@@ -73,6 +73,10 @@ export function DoomDemo({
   );
   const [stats, setStats] = useState<DoomStats>();
   const [isFocused, setIsFocused] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  // Read when the game starts, without restarting it on every toggle
+  const isMutedRef = useRef(isMuted);
+  isMutedRef.current = isMuted;
   const [plotSize, setPlotSize] = useState({ width: 0, height: 0 });
 
   const [palette] = useState(() => new DoomPalette());
@@ -92,6 +96,7 @@ export function DoomDemo({
         sinkRef.current?.pushFrame(frame);
       });
       doomRef.current = doom;
+      doom.setMuted(isMutedRef.current);
       doom.start().catch((error: unknown) => onError?.(error));
       return () => {
         doom.stop();
@@ -159,7 +164,10 @@ export function DoomDemo({
           role="application"
           aria-label="Doom, plotted. Focus to play."
           data-testid="doom-plot"
-          onPointerDown={() => container?.focus()}
+          onPointerDown={() => {
+            container?.focus();
+            doomRef.current?.resumeAudio();
+          }}
           onKeyDown={(event) => doomRef.current?.keyDown(event.nativeEvent)}
           onKeyUp={(event) => doomRef.current?.keyUp(event.nativeEvent)}
           onFocus={() => setIsFocused(true)}
@@ -167,7 +175,9 @@ export function DoomDemo({
         >
           {plot}
           {!isFocused && (
-            <div className="doom-demo-focus-hint">Click the plot to play</div>
+            <div className="doom-demo-focus-hint">
+              Click the plot to play, with sound
+            </div>
           )}
         </div>
       </div>
@@ -189,6 +199,20 @@ export function DoomDemo({
           ))}
         </div>
         {controls}
+        <label className="plot-demo-checkbox" htmlFor="doom-mute">
+          <input
+            id="doom-mute"
+            type="checkbox"
+            data-testid="doom-mute"
+            checked={isMuted}
+            onChange={(event) => {
+              setIsMuted(event.target.checked);
+              // In the click handler, so the browser lets the sound start
+              doomRef.current?.setMuted(event.target.checked);
+            }}
+          />
+          Mute sound
+        </label>
         <p className="plot-demo-hint">
           Arrows move, Ctrl fires, Space opens doors, Enter selects, Alt and the
           arrows strafe, Escape opens the menu.

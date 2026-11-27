@@ -1,6 +1,5 @@
 import doomUrl from "./doom.wasm?url";
-import { FULL_SCREEN_BLOCKS, setDoomDefault } from "./doomDefaults";
-import { patchDemoVersions } from "./doomDemos";
+import { DoomAudio, type DoomAudioExports } from "./DoomAudio";
 import { DOOM_HEIGHT, DOOM_WIDTH, type DoomFrame } from "./doomFrame";
 
 /** Size of the RGBA frame the port hands to `js_draw_screen`. */
@@ -10,12 +9,11 @@ const OUTPUT_HEIGHT = 400;
 /** Pages of 64 KiB the port expects its memory to start with. */
 const INITIAL_MEMORY_PAGES = 108;
 
-interface DoomExports {
+interface DoomExports extends DoomAudioExports {
   main: () => void;
   exit: () => void;
   doom_loop_step: () => void;
   add_browser_event: (event: number, keyCode: number) => void;
-  malloc: (size: number) => number;
   /** Copies the 8 bit, palette indexed screen into `pointer`. */
   I_ReadScreen: (pointer: number) => void;
 }
@@ -75,8 +73,8 @@ function getDoomKeyCode(event: KeyboardEvent): number {
 }
 
 /**
- * The shareware episode of Doom, compiled to wasm, as used by
- * https://github.com/mofojed/deephaven-doom.
+ * The shareware episode of Doom, compiled to wasm from
+ * https://github.com/mofojed/wasm-fizzbuzz, with sound.
  *
  * Alongside the RGBA frame the port draws, each frame reads back the palette
  * indexed screen Doom actually renders, so a plot can split it by palette
@@ -88,6 +86,10 @@ export class Doom {
   private memory: WebAssembly.Memory | undefined;
 
   private exports: DoomExports | undefined;
+
+  private audio: DoomAudio | undefined;
+
+  private isMuted = false;
 
   private screenPointer = 0;
 
@@ -133,10 +135,11 @@ export class Doom {
     const exports = instance.exports as unknown as DoomExports;
     this.exports = exports;
     this.screenPointer = exports.malloc(DOOM_WIDTH * DOOM_HEIGHT);
-    const bytes = new Uint8Array(memory.buffer);
-    patchDemoVersions(bytes);
-    setDoomDefault(bytes, "screenblocks", FULL_SCREEN_BLOCKS);
     exports.main();
+    if (typeof AudioContext !== "undefined") {
+      this.audio = new DoomAudio(new AudioContext(), memory, exports);
+      this.audio.setMuted(this.isMuted);
+    }
     this.animationFrame = requestAnimationFrame(this.handleAnimationFrame);
   }
 
@@ -146,6 +149,18 @@ export class Doom {
       cancelAnimationFrame(this.animationFrame);
       this.animationFrame = undefined;
     }
+    this.audio?.close();
+    this.audio = undefined;
+  }
+
+  /** Call from a click, so the browser lets the sound start. */
+  resumeAudio(): void {
+    this.audio?.resume();
+  }
+
+  setMuted(isMuted: boolean): void {
+    this.isMuted = isMuted;
+    this.audio?.setMuted(isMuted);
   }
 
   keyDown(event: KeyboardEvent): void {
@@ -160,6 +175,7 @@ export class Doom {
     if (this.exports == null) {
       return;
     }
+    this.audio?.resume();
     this.exports.add_browser_event(type, getDoomKeyCode(event));
     event.preventDefault();
     event.stopPropagation();
@@ -167,6 +183,7 @@ export class Doom {
 
   private handleAnimationFrame(): void {
     this.exports?.doom_loop_step();
+    this.audio?.pump();
     if (!this.isStopped) {
       this.animationFrame = requestAnimationFrame(this.handleAnimationFrame);
     }
